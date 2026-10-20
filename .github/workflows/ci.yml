@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
@@ -15,9 +16,23 @@ jobs:
           java-version: "21"
           cache: sbt
       - uses: sbt/setup-sbt@v1
+      - name: Cache sbt target directories
+        uses: actions/cache@v4
+        with:
+          path: |
+            target
+            project/target
+            project/project/target
+            builder-docs/target
+          key: sbt-target-${{ runner.os }}-${{ hashFiles('build.sbt', 'project/build.properties', 'project/*.sbt', 'project/*.scala') }}-${{ hashFiles('src/**', 'builder-docs/src/**', 'docs/**') }}
+          restore-keys: |
+            sbt-target-${{ runner.os }}-${{ hashFiles('build.sbt', 'project/build.properties', 'project/*.sbt', 'project/*.scala') }}-
+            sbt-target-${{ runner.os }}-
       - name: Check formatting
         run: sbt "scalafmtCheckAll; scalafmtSbtCheck"
       - name: Check scalafix
         run: sbt "scalafixAll --check"
       - name: Test
         run: sbt testFull
+      - name: Docs (mdoc)
+        run: sbt docs/mdoc
