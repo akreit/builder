@@ -20,11 +20,11 @@ object SampleData:
       qty <- Quantity.from(1)
       date <- Dates.of(2026, 9, 15)
       valid <- Dates.of(2026, 12, 15)
-    yield
-      def ex[A](a: A) = Extracted.fromPage(a, pg, Confidence.High)
-      val vatCents = netCents * 19 / 100
-      val net = Money.ofMinor(netCents, eur)
-      Offer(
+      ex = [A] => (a: A) => Extracted.fromPage(a, pg, Confidence.High)
+      net = Money.ofMinor(netCents, eur)
+      vat = rate.vatOn(net)
+      gross <- net.plus(vat).left.map(DomainError.InvalidMoney(_))
+      o <- Offer.from(
         id = offerId,
         contractor = ex(Contractor(contractor)),
         date = ex(date),
@@ -44,11 +44,12 @@ object SampleData:
         ),
         net = ex(net),
         vatRate = ex(rate),
-        vat = ex(Money.ofMinor(vatCents, eur)),
-        gross = ex(Money.ofMinor(netCents + vatCents, eur)),
+        vat = ex(vat),
+        gross = ex(gross),
         notes = Nil,
         exclusions = List("Disposal of old material")
       )
+    yield o
 
   val project: Either[DomainError, Project] =
     for
@@ -58,17 +59,18 @@ object SampleData:
       r1 <- offer("roof-a", "Dachdeckerei Schmidt", Category.Roofing, 2_400_000, 1)
       e1 <- offer("elec-a", "Elektro Weber", Category.Electrical, 640_000, 1)
       e2 <- offer("elec-b", "Volt Service", Category.Electrical, 590_000, 1)
-    yield Project(
-      id = id,
-      name = "Altbau Sanierung",
-      currency = eur,
-      workPackages =
-        List(
-          WorkPackage(Category.Windows, "Replace all windows", List("Living room", "Bedrooms")),
-          WorkPackage(Category.Roofing, "Re-roof and insulate", List("Roof")),
-          WorkPackage(Category.Electrical, "Rewire ground floor", List("Ground floor")),
-          WorkPackage(Category.Plumbing, "New bathroom pipes", List("Bathroom"))
-        ),
-      offers = List(w1, w2, r1, e1, e2),
-      favorites = Map(Category.Windows -> w1.id)
-    )
+      p <- Project.from(
+        id = id,
+        name = "Altbau Sanierung",
+        currency = eur,
+        workPackages =
+          List(
+            WorkPackage(Category.Windows, "Replace all windows", List("Living room", "Bedrooms")),
+            WorkPackage(Category.Roofing, "Re-roof and insulate", List("Roof")),
+            WorkPackage(Category.Electrical, "Rewire ground floor", List("Ground floor")),
+            WorkPackage(Category.Plumbing, "New bathroom pipes", List("Bathroom"))
+          ),
+        offers = List(w1, w2, r1, e1, e2),
+        favorites = Map(Category.Windows -> w1.id)
+      )
+    yield p

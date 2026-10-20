@@ -23,7 +23,17 @@ opaque type VatRate = BigDecimal
 object VatRate:
   def from(percent: BigDecimal): Either[DomainError, VatRate] =
     Either.cond(percent >= 0 && percent <= 100, percent, DomainError.InvalidVatRate(percent))
-  extension (r: VatRate) def percent: BigDecimal = r
+  extension (r: VatRate)
+    def percent: BigDecimal = r
+
+    /** VAT on `net`, rounded HALF_UP to the currency's minor unit. The single rounding rule used
+      * everywhere (offer validation, sample data, test fixtures).
+      */
+    def vatOn(net: Money): Money =
+      val minor = (BigDecimal(net.minor.value) * r / 100)
+        .setScale(0, BigDecimal.RoundingMode.HALF_UP)
+        .toBigInt
+      Money(MinorUnits(minor), net.currency)
 
 /** Strictly positive quantity of a line item. */
 opaque type Quantity = BigDecimal
@@ -58,7 +68,13 @@ final case class LineItem(
     total: Extracted[Money]
 )
 
-final case class Offer(
+/** A contractor offer whose amounts are known to be consistent. Only [[Offer.from]] builds one.
+  *
+  * Sign rules: `net`, `vat` and `gross` must be non-negative. Individual line items MAY be
+  * negative, so that discount lines (e.g. "Rabatt") can be represented; they still have to sum to
+  * `net`.
+  */
+final case class Offer private (
     id: OfferId,
     contractor: Extracted[Contractor],
     date: Extracted[LocalDate],
@@ -73,8 +89,62 @@ final case class Offer(
     exclusions: List[String]
 )
 
-/** A renovation project. `favorites` holds at most one chosen offer per category. */
-final case class Project(
+object Offer:
+  private def nonNegative(field: String, m: Money): Either[DomainError, Money] =
+    Either.cond(!m.isNegative, m, DomainError.NegativeAmount(field, m))
+
+  /** Validates sign rules, `gross == net + vat`, `vat == round_HALF_UP(net * rate)` and that the
+    * line-item totals sum to `net`.
+    */
+  def from(
+      id: OfferId,
+      contractor: Extracted[Contractor],
+      date: Extracted[LocalDate],
+      validUntil: Option[Extracted[LocalDate]],
+      category: Category,
+      lineItems: List[LineItem],
+      net: Extracted[Money],
+      vatRate: Extracted[VatRate],
+      vat: Extracted[Money],
+      gross: Extracted[Money],
+      notes: List[String],
+      exclusions: List[String]
+  ): Either[DomainError, Offer] =
+    val n = net.value
+    val v = vat.value
+    val g = gross.value
+    val expectedVat = vatRate.value.vatOn(n)
+    for
+      _ <- nonNegative("net", n)
+      _ <- nonNegative("vat", v)
+      _ <- nonNegative("gross", g)
+      sum <- n.plus(v).left.map(DomainError.InvalidMoney(_))
+      _ <- Either.cond(sum == g, (), DomainError.GrossMismatch(n, v, g))
+      _ <- Either.cond(expectedVat == v, (), DomainError.VatMismatch(expectedVat, v))
+      items <- Money
+        .sum(n.currency, lineItems.map(_.total.value))
+        .left
+        .map(DomainError.InvalidMoney(_))
+      _ <- Either.cond(items == n, (), DomainError.LineItemsMismatch(items, n))
+    yield Offer(
+      id,
+      contractor,
+      date,
+      validUntil,
+      category,
+      lineItems,
+      net,
+      vatRate,
+      vat,
+      gross,
+      notes,
+      exclusions
+    )
+
+/** A renovation project. Offer ids are unique; `favorites` holds at most one chosen offer per
+  * category. Only [[Project.from]] builds one.
+  */
+final case class Project private (
     id: ProjectId,
     name: String,
     currency: Currency,
@@ -82,3 +152,17 @@ final case class Project(
     offers: List[Offer],
     favorites: Map[Category, OfferId]
 )
+
+object Project:
+  def from(
+      id: ProjectId,
+      name: String,
+      currency: Currency,
+      workPackages: List[WorkPackage],
+      offers: List[Offer],
+      favorites: Map[Category, OfferId]
+  ): Either[DomainError, Project] =
+    offers
+      .groupBy(_.id)
+      .collectFirst { case (oid, os) if os.sizeIs > 1 => DomainError.DuplicateOfferId(oid.value) }
+      .toLeft(Project(id, name, currency, workPackages, offers, favorites))

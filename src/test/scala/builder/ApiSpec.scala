@@ -16,11 +16,20 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
   import Fixtures.*
 
   private val chfProject =
-    project(Nil, List(offer("x", Category.Other, 100, Currency.CHF)))
-      .copy(id = ProjectId.from("chf").value)
+    project(Nil, List(offer("x", Category.Other, 100, Currency.CHF)), id = "chf")
+
+  private val badFavoriteProject =
+    project(
+      Nil,
+      List(offer("floor-a", Category.Flooring, 100)),
+      Map(Category.Painting -> offerId("floor-a")),
+      id = "badfav"
+    )
 
   private val app =
-    Api(InMemoryProjectRepository.of(List(SampleData.project.value, chfProject))).routes.orNotFound
+    Api(
+      InMemoryProjectRepository.of(List(SampleData.project.value, chfProject, badFavoriteProject))
+    ).routes.orNotFound
 
   private def call(path: Uri): IO[(Status, Json)] =
     app
@@ -56,4 +65,13 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
       status shouldBe Status.UnprocessableContent
       json.hcursor.downField("actual").as[String] shouldBe Right("CHF")
     }
+  }
+
+  "unknown favorite is reported as 422 with its own body" in {
+    call(uri"/projects/badfav/totals").asserting(
+      _ shouldBe (Status.UnprocessableContent -> Json.obj(
+        "category" -> Json.fromString("Painting"),
+        "offerId" -> Json.fromString("floor-a")
+      ))
+    )
   }

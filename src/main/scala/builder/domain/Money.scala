@@ -20,6 +20,8 @@ final case class Money(minor: MinorUnits, currency: Currency):
       MoneyError.CurrencyMismatch(currency, other.currency)
     )
 
+  def isNegative: Boolean = minor.value < 0
+
   def toDecimal: BigDecimal = BigDecimal(minor.value, currency.minorDigits)
 
   /** Plain decimal string with exactly the currency's minor digits, e.g. "1234.50". */

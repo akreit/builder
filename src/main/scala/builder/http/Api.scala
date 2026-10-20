@@ -75,32 +75,27 @@ enum ApiError:
   case ProjectNotFound(projectId: String)
   case CurrencyMismatch(offerId: String, expected: String, actual: String)
   case UnknownFavorite(category: String, offerId: String)
-  case Internal(message: String)
 
 object ApiError:
   given Codec.AsObject[InvalidProjectId] = Codec.AsObject.derived
   given Codec.AsObject[ProjectNotFound] = Codec.AsObject.derived
   given Codec.AsObject[CurrencyMismatch] = Codec.AsObject.derived
   given Codec.AsObject[UnknownFavorite] = Codec.AsObject.derived
-  given Codec.AsObject[Internal] = Codec.AsObject.derived
   given Schema[InvalidProjectId] = Schema.derived
   given Schema[ProjectNotFound] = Schema.derived
   given Schema[CurrencyMismatch] = Schema.derived
   given Schema[UnknownFavorite] = Schema.derived
-  given Schema[Internal] = Schema.derived
 
   def fromTotals(e: TotalsError): ApiError = e match
     case TotalsError.CurrencyMismatch(o, exp, act) =>
       CurrencyMismatch(o.value, exp.code, act.code)
     case TotalsError.UnknownFavorite(c, o) => UnknownFavorite(c.toString, o.value)
-    case TotalsError.Arithmetic(err)       => Internal(err.toString)
 
   val output: EndpointOutput.OneOf[ApiError, ApiError] = oneOf[ApiError](
     oneOfVariant(StatusCode.BadRequest, jsonBody[InvalidProjectId]),
     oneOfVariant(StatusCode.NotFound, jsonBody[ProjectNotFound]),
     oneOfVariant(StatusCode.UnprocessableEntity, jsonBody[CurrencyMismatch]),
-    oneOfVariant(StatusCode.UnprocessableEntity, jsonBody[UnknownFavorite]),
-    oneOfVariant(StatusCode.InternalServerError, jsonBody[Internal])
+    oneOfVariant(StatusCode.UnprocessableEntity, jsonBody[UnknownFavorite])
   )
 
 object Endpoints:

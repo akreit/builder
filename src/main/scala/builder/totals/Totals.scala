@@ -37,7 +37,6 @@ final case class ProjectTotals(
 enum TotalsError:
   case CurrencyMismatch(offerId: OfferId, expected: Currency, actual: Currency)
   case UnknownFavorite(category: Category, offerId: OfferId)
-  case Arithmetic(error: MoneyError)
 
 object Totals:
 
@@ -85,6 +84,8 @@ object Totals:
         statusFor(c, byCat.getOrElse(c, Nil), project.favorites.lift(c)).map(CategoryTotal(c, _))
       )
       counted = cats.collect { case CategoryTotal(_, s: CategoryStatus.Counted) => s }
-      net <- Money.sum(cur, counted.map(_.net)).leftMap(TotalsError.Arithmetic(_))
-      gross <- Money.sum(cur, counted.map(_.gross)).leftMap(TotalsError.Arithmetic(_))
-    yield ProjectTotals(project.id, cur, cats, net, gross)
+    yield
+      // checkCurrency guarantees every counted amount is in `cur`, so plain minor-unit sums are safe.
+      def total(f: CategoryStatus.Counted => Money): Money =
+        Money(MinorUnits(counted.map(f(_).minor.value).sum), cur)
+      ProjectTotals(project.id, cur, cats, total(_.net), total(_.gross))
