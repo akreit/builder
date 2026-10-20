@@ -1,6 +1,6 @@
 ThisBuild / scalaVersion := "3.10.0"
 ThisBuild / semanticdbEnabled := true
-ThisBuild / scalacOptions ++= Seq("-deprecation", "-feature", "-Wunused:all")
+ThisBuild / scalacOptions ++= Seq("-deprecation", "-feature", "-Wunused:all", "-Werror")
 
 val catsEffectV = "3.7.1"
 val fs2V = "3.14.0"
