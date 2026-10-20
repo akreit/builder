@@ -6,6 +6,8 @@ import cats.effect.Ref
 
 enum RepoError:
   case ProjectNotFound(id: ProjectId)
+  case CategoryNotFound(id: CategoryId)
+  case OfferNotFound(id: OfferId)
   case Invalid(error: DomainError)
 
 trait ProjectRepository:
@@ -32,7 +34,11 @@ final class InMemoryProjectRepository private (state: Ref[IO, Map[ProjectId, Pro
       val updated = projects
         .lift(id)
         .toRight(RepoError.ProjectNotFound(id))
-        .flatMap(_.withFavorite(category, offer).left.map(RepoError.Invalid(_)))
+        .flatMap(p =>
+          if !p.categories.exists(_.id == category) then Left(RepoError.CategoryNotFound(category))
+          else if !p.offers.exists(_.id == offer) then Left(RepoError.OfferNotFound(offer))
+          else p.withFavorite(category, offer).left.map(RepoError.Invalid(_))
+        )
       updated.fold(_ => projects, p => projects.updated(id, p)) -> updated
     }
 

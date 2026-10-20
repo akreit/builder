@@ -20,7 +20,7 @@ object Pages:
       |.status{display:inline-block;padding:.1rem .5rem;border-radius:4px;font-size:.85rem;margin-left:.5rem}
       |.gezaehlt{background:#d9f2d9}.offen{background:#ffe9b3}.fehlt{background:#f5d0d0}
       |.favorit{font-weight:bold}.summe{background:#f4f6fa;padding:1rem;border-radius:6px}
-      |.hinweis{color:#666;font-size:.9rem}""".stripMargin
+      |.hinweis{color:#666;font-size:.9rem}.fehlermeldung{background:#f5d0d0;padding:.5rem 1rem;border-radius:6px}""".stripMargin
 
   private def statusBadge(s: CategoryStatus): Frag = s match
     case CategoryStatus.Counted(_, _, _, _, CountedReason.Favorite) =>
@@ -104,9 +104,10 @@ object Pages:
           meta(name := "viewport", attr("content") := "width=device-width, initial-scale=1"),
           tags2.title(pageTitle),
           tags2.style(raw(styles)),
+          meta(name := "htmx-config", attr("content") := htmxConfig),
           script(src := "/static/htmx.min.js")
         ),
-        body(content*)
+        body(div(id := "fehler", attr("role") := "alert"), frag(content*))
       )
     ).render
 
@@ -121,7 +122,16 @@ object Pages:
       projectFragment(project)
     )
 
-  def message(text: String): TypedTag[String] = div(id := "fehler", cls := "fehler")(text)
+  /** htmx 2 defaults to not swapping 4xx/5xx; swap them (still flagged as errors) so HX-Retarget
+    * works.
+    */
+  private val htmxConfig: String =
+    """{"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"[45]..","swap":true,"error":true}]}"""
+
+  /** Error fragment swapped into the `#fehler` slot of the layout. */
+  def errorFragment(text: String): TypedTag[String] = p(cls := "fehlermeldung")(text)
+
+  def message(text: String): TypedTag[String] = div(cls := "fehler")(text)
 
   /** German description of a validation error, for the UI. */
   def describe(e: DomainError): String = e match

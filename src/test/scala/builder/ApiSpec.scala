@@ -33,6 +33,22 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
           )
       )
 
+  private def favorite(path: Uri, headers: Header.ToRaw*): Request[IO] =
+    Request[IO](Method.POST, path).putHeaders(headers*)
+
+  private val hx: Header.ToRaw = "HX-Request" -> "true"
+
+  private def runWithHeaders(req: Request[IO]): IO[(Status, String, Headers)] =
+    app
+      .flatMap(_.run(req))
+      .flatMap(r => r.bodyText.compile.string.map(b => (r.status, b, r.headers)))
+
+  private def retargeted(h: Headers) =
+    (
+      h.get(org.typelevel.ci.CIString("HX-Retarget")).map(_.head.value),
+      h.get(org.typelevel.ci.CIString("HX-Reswap")).map(_.head.value)
+    )
+
   private def json(path: Uri): IO[(Status, Json)] =
     run(Request[IO](Method.GET, path)).map((s, b, _) => s -> parse(b).getOrElse(Json.Null))
 
@@ -88,10 +104,7 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
   }
 
   "POST favorite updates the favorite and re-renders the totals with the new sum" in {
-    val post = Request[IO](
-      Method.POST,
-      uri"/ui/projects/demo/categories/daemmung/favorite/daemmung-b"
-    )
+    val post = favorite(uri"/ui/projects/demo/categories/daemmung/favorite/daemmung-b", hx)
     for
       a <- app
       r <- a.run(post)
@@ -110,8 +123,7 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
   }
 
   "POST favorite with an offer of another category is rejected with 422 and changes nothing" in {
-    val post =
-      Request[IO](Method.POST, uri"/ui/projects/demo/categories/dachfenster/favorite/gauben-b")
+    val post = favorite(uri"/ui/projects/demo/categories/dachfenster/favorite/gauben-b", hx)
     for
       a <- app
       r <- a.run(post)
@@ -121,11 +133,76 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
         .flatMap(_.bodyText.compile.string)
     yield
       r.status shouldBe Status.UnprocessableContent
+      retargeted(r.headers) shouldBe (Some("#fehler"), Some("innerHTML"))
       body should include("gehört nicht zur Kategorie")
+      body should include("class=\"fehlermeldung\"")
+      body should not include "id=\"fehler\""
       parse(after).flatMap(_.hcursor.downField("net").as[String]) shouldBe Right("21118.50")
   }
 
   "POST favorite for an unknown project is 404" in {
-    run(Request[IO](Method.POST, uri"/ui/projects/nope/categories/gauben/favorite/gauben-b"))
-      .asserting(_._1 shouldBe Status.NotFound)
+    runWithHeaders(favorite(uri"/ui/projects/nope/categories/gauben/favorite/gauben-b", hx))
+      .asserting { (status, body, h) =>
+        status shouldBe Status.NotFound
+        retargeted(h) shouldBe (Some("#fehler"), Some("innerHTML"))
+        body should include("Projekt nicht gefunden")
+      }
+  }
+
+  "POST favorite for an unknown category is 404" in {
+    runWithHeaders(favorite(uri"/ui/projects/demo/categories/gibtsnicht/favorite/gauben-b", hx))
+      .asserting { (status, body, _) =>
+        status shouldBe Status.NotFound
+        body should include("Kategorie nicht gefunden")
+      }
+  }
+
+  "POST favorite for an unknown offer is 404" in {
+    runWithHeaders(favorite(uri"/ui/projects/demo/categories/gauben/favorite/gibtsnicht", hx))
+      .asserting { (status, body, _) =>
+        status shouldBe Status.NotFound
+        body should include("Angebot nicht gefunden")
+      }
+  }
+
+  "POST favorite without HX-Request header is 403" in {
+    runWithHeaders(favorite(uri"/ui/projects/demo/categories/daemmung/favorite/daemmung-b"))
+      .asserting { (status, body, h) =>
+        status shouldBe Status.Forbidden
+        retargeted(h) shouldBe (Some("#fehler"), Some("innerHTML"))
+        body should include("Anfrage abgelehnt")
+      }
+  }
+
+  "POST favorite from a foreign Origin is 403" in {
+    runWithHeaders(
+      favorite(
+        uri"/ui/projects/demo/categories/daemmung/favorite/daemmung-b",
+        hx,
+        "Origin" -> "https://evil.example",
+        "Host" -> "127.0.0.1:8080"
+      )
+    ).asserting { (status, body, _) =>
+      status shouldBe Status.Forbidden
+      body should include("fremde Herkunft")
+    }
+  }
+
+  "POST favorite from the same Origin is accepted" in {
+    runWithHeaders(
+      favorite(
+        uri"/ui/projects/demo/categories/daemmung/favorite/daemmung-b",
+        hx,
+        "Origin" -> "http://127.0.0.1:8080",
+        "Host" -> "127.0.0.1:8080"
+      )
+    ).asserting(_._1 shouldBe Status.Ok)
+  }
+
+  "GET / has the #fehler slot and the htmx error responseHandling config" in {
+    run(Request[IO](Method.GET, uri"/")).asserting { (_, body, _) =>
+      body should include("<div id=\"fehler\"")
+      body should include("name=\"htmx-config\"")
+      body should include("&quot;[45]..&quot;,&quot;swap&quot;:true")
+    }
   }

@@ -121,6 +121,14 @@ object Endpoints:
   val overviewPage =
     endpoint.get.in("").out(htmlBodyUtf8).errorOut(htmlError)
 
+  /** htmx fragment error: retargets the swap into the layout's `#fehler` slot. */
+  private val fragmentError: EndpointOutput[HtmlError] =
+    statusCode
+      .and(header("HX-Retarget", "#fehler"))
+      .and(header("HX-Reswap", "innerHTML"))
+      .and(htmlBodyUtf8)
+      .mapTo[HtmlError]
+
   /** htmx: marks an offer as favorite and returns the re-rendered overview fragment. */
   val markFavorite =
     endpoint.post
@@ -129,8 +137,11 @@ object Endpoints:
           "categoryId"
         ) / "favorite" / path[String]("offerId")
       )
+      .in(header[Option[String]]("HX-Request"))
+      .in(header[Option[String]]("Origin"))
+      .in(header[Option[String]]("Host"))
       .out(htmlBodyUtf8)
-      .errorOut(htmlError)
+      .errorOut(fragmentError)
 
 final class Api(repo: ProjectRepository, home: ProjectId):
   private def totalsLogic(raw: String): IO[Either[ApiError, TotalsResponse]] =
@@ -150,25 +161,49 @@ final class Api(repo: ProjectRepository, home: ProjectId):
   private val overview: IO[Either[HtmlError, String]] =
     repo.find(home).map(_.toRight(notFound("Projekt")).map(p => Pages.overview(p)))
 
+  private def fragmentError(status: StatusCode, text: String): HtmlError =
+    HtmlError(status, Pages.errorFragment(text).render)
+
+  /** CSRF guard: only htmx requests, and an Origin (if sent) must match the Host. */
+  private def checkRequest(
+      hxRequest: Option[String],
+      origin: Option[String],
+      host: Option[String]
+  ): Either[HtmlError, Unit] =
+    val forbidden = fragmentError(StatusCode.Forbidden, _)
+    val sameOrigin = origin.forall(o => o.split("://", 2).lift(1).exists(h => host.contains(h)))
+    if !hxRequest.contains("true") then
+      Left(forbidden("Anfrage abgelehnt: nur über die Oberfläche erlaubt"))
+    else if !sameOrigin then Left(forbidden("Anfrage abgelehnt: fremde Herkunft"))
+    else Right(())
+
   private def favoriteLogic(
       projectId: String,
       categoryId: String,
-      offerId: String
+      offerId: String,
+      hxRequest: Option[String],
+      origin: Option[String],
+      host: Option[String]
   ): IO[Either[HtmlError, String]] =
     val ids = for
       p <- ProjectId.from(projectId)
       c <- CategoryId.from(categoryId)
       o <- OfferId.from(offerId)
     yield (p, c, o)
-    ids match
-      case Left(e) =>
-        IO.pure(Left(HtmlError(StatusCode.BadRequest, Pages.message(Pages.describe(e)).render)))
-      case Right((p, c, o)) =>
+    (checkRequest(hxRequest, origin, host), ids) match
+      case (Left(e), _) => IO.pure(Left(e))
+      case (_, Left(e)) => IO.pure(Left(fragmentError(StatusCode.BadRequest, Pages.describe(e))))
+      case (Right(()), Right((p, c, o))) =>
         repo.setFavorite(p, c, o).map {
           case Right(project)                     => Right(Pages.projectFragment(project).render)
-          case Left(RepoError.ProjectNotFound(_)) => Left(notFound("Projekt"))
-          case Left(RepoError.Invalid(e))         =>
-            Left(HtmlError(StatusCode.UnprocessableEntity, Pages.message(Pages.describe(e)).render))
+          case Left(RepoError.ProjectNotFound(_)) =>
+            Left(fragmentError(StatusCode.NotFound, "Projekt nicht gefunden"))
+          case Left(RepoError.CategoryNotFound(c)) =>
+            Left(fragmentError(StatusCode.NotFound, s"Kategorie nicht gefunden: ${c.value}"))
+          case Left(RepoError.OfferNotFound(o)) =>
+            Left(fragmentError(StatusCode.NotFound, s"Angebot nicht gefunden: ${o.value}"))
+          case Left(RepoError.Invalid(e)) =>
+            Left(fragmentError(StatusCode.UnprocessableEntity, Pages.describe(e)))
         }
 
   val routes: HttpRoutes[IO] = Http4sServerInterpreter[IO]().toRoutes(
