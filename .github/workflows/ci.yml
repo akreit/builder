@@ -24,10 +24,9 @@ jobs:
             project/target
             project/project/target
             builder-docs/target
-          key: sbt-target-${{ runner.os }}-${{ hashFiles('build.sbt', 'project/build.properties', 'project/*.sbt', 'project/*.scala') }}-${{ hashFiles('src/**', 'builder-docs/src/**', 'docs/**') }}
+          key: sbt-target-${{ runner.os }}-${{ hashFiles('build.sbt', 'project/**') }}-${{ hashFiles('src/**') }}
           restore-keys: |
-            sbt-target-${{ runner.os }}-${{ hashFiles('build.sbt', 'project/build.properties', 'project/*.sbt', 'project/*.scala') }}-
-            sbt-target-${{ runner.os }}-
+            sbt-target-${{ runner.os }}-${{ hashFiles('build.sbt','project/**') }}-
       - name: Check formatting
         run: sbt "scalafmtCheckAll; scalafmtSbtCheck"
       - name: Check scalafix
