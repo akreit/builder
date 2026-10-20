@@ -1,6 +1,4 @@
 package builder
-
-import builder.domain.*
 import builder.http.Api
 import builder.repo.InMemoryProjectRepository
 import cats.effect.IO
@@ -15,63 +13,119 @@ import org.scalatest.matchers.should.Matchers
 class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
   import Fixtures.*
 
-  private val chfProject =
-    project(Nil, List(offer("x", Category.Other, 100, Currency.CHF)), id = "chf")
+  private val sample = SampleData.project.value
 
-  private val badFavoriteProject =
-    project(
-      Nil,
-      List(offer("floor-a", Category.Flooring, 100)),
-      Map(Category.Painting -> offerId("floor-a")),
-      id = "badfav"
-    )
+  /** A fresh app per test, since favorites change repository state. */
+  private val app: IO[HttpApp[IO]] =
+    InMemoryProjectRepository.of(List(sample)).map(repo => Api(repo, sample.id).routes.orNotFound)
 
-  private val app =
-    Api(
-      InMemoryProjectRepository.of(List(SampleData.project.value, chfProject, badFavoriteProject))
-    ).routes.orNotFound
-
-  private def call(path: Uri): IO[(Status, Json)] =
+  private def run(req: Request[IO]): IO[(Status, String, Option[String])] =
     app
-      .run(Request[IO](Method.GET, path))
-      .flatMap(r => r.bodyText.compile.string.map(b => r.status -> parse(b).getOrElse(Json.Null)))
+      .flatMap(_.run(req))
+      .flatMap(r =>
+        r.bodyText.compile.string
+          .map(b =>
+            (
+              r.status,
+              b,
+              r.contentType.map(m => s"${m.mediaType.mainType}/${m.mediaType.subType}")
+            )
+          )
+      )
+
+  private def json(path: Uri): IO[(Status, Json)] =
+    run(Request[IO](Method.GET, path)).map((s, b, _) => s -> parse(b).getOrElse(Json.Null))
 
   "GET /health returns 200" in {
-    call(uri"/health").asserting(
+    json(uri"/health").asserting(
       _ shouldBe (Status.Ok -> Json.obj("status" -> Json.fromString("ok")))
     )
   }
 
   "GET /projects/demo/totals returns the running total of the sample project" in {
-    call(uri"/projects/demo/totals").asserting { (status, json) =>
+    json(uri"/projects/demo/totals").asserting { (status, js) =>
       status shouldBe Status.Ok
-      val c = json.hcursor
-      c.downField("net").as[String] shouldBe Right("36500.00")
-      c.downField("missingCategories").as[List[String]] shouldBe Right(List("Plumbing"))
-      c.downField("undecidedCategories").as[List[String]] shouldBe Right(List("Electrical"))
+      val c = js.hcursor
+      c.downField("net").as[String] shouldBe Right("21118.50")
+      c.downField("missingCategories").as[List[String]] shouldBe Right(
+        List("Dachfenster", "Sonstiges")
+      )
+      c.downField("undecidedCategories").as[List[String]] shouldBe Right(List("Dämmung"))
     }
   }
 
   "GET /projects/{id}/totals returns 404 for an unknown project" in {
-    call(uri"/projects/nope/totals").asserting(_._1 shouldBe Status.NotFound)
+    json(uri"/projects/nope/totals").asserting(_._1 shouldBe Status.NotFound)
   }
 
   "GET /projects/{id}/totals returns 400 for a malformed id" in {
-    call(uri"/projects/%20bad%21/totals").asserting(_._1 shouldBe Status.BadRequest)
+    json(uri"/projects/%20bad%21/totals").asserting(_._1 shouldBe Status.BadRequest)
   }
 
-  "currency mismatch is reported as 422" in {
-    call(uri"/projects/chf/totals").asserting { (status, json) =>
-      status shouldBe Status.UnprocessableContent
-      json.hcursor.downField("actual").as[String] shouldBe Right("CHF")
+  "GET / renders the German Projektübersicht as HTML" in {
+    run(Request[IO](Method.GET, uri"/")).asserting { (status, body, ct) =>
+      status shouldBe Status.Ok
+      ct shouldBe Some("text/html")
+      body should include("Projektübersicht: Dach")
+      body should include("Gesamtsumme")
+      body should include("21.118,50 €")
+      body should include("Entscheidung offen")
+      body should include("Kategorien ohne Angebot")
+      body should include("Als Favorit markieren")
+      body should include("/static/htmx.min.js")
     }
   }
 
-  "unknown favorite is reported as 422 with its own body" in {
-    call(uri"/projects/badfav/totals").asserting(
-      _ shouldBe (Status.UnprocessableContent -> Json.obj(
-        "category" -> Json.fromString("Painting"),
-        "offerId" -> Json.fromString("floor-a")
-      ))
+  "GET /static/htmx.min.js serves the vendored htmx" in {
+    run(Request[IO](Method.GET, uri"/static/htmx.min.js")).asserting { (status, body, _) =>
+      status shouldBe Status.Ok
+      body should startWith("var htmx=")
+    }
+  }
+
+  "GET on an unknown path is 404, not the overview page" in {
+    run(Request[IO](Method.GET, uri"/gibt-es-nicht")).asserting(_._1 shouldBe Status.NotFound)
+  }
+
+  "POST favorite updates the favorite and re-renders the totals with the new sum" in {
+    val post = Request[IO](
+      Method.POST,
+      uri"/ui/projects/demo/categories/daemmung/favorite/daemmung-b"
     )
+    for
+      a <- app
+      r <- a.run(post)
+      fragment <- r.bodyText.compile.string
+      after <- a
+        .run(Request[IO](Method.GET, uri"/projects/demo/totals"))
+        .flatMap(_.bodyText.compile.string)
+    yield
+      r.status shouldBe Status.Ok
+      fragment should include("id=\"projekt\"")
+      fragment should not include "<html"
+      // 21.118,50 € + Holzbau Fiktiv KG 120 m² × 89,90 € = 10.788,00 €
+      fragment should include("31.906,50 €")
+      fragment should not include "Entscheidung offen"
+      parse(after).flatMap(_.hcursor.downField("net").as[String]) shouldBe Right("31906.50")
+  }
+
+  "POST favorite with an offer of another category is rejected with 422 and changes nothing" in {
+    val post =
+      Request[IO](Method.POST, uri"/ui/projects/demo/categories/dachfenster/favorite/gauben-b")
+    for
+      a <- app
+      r <- a.run(post)
+      body <- r.bodyText.compile.string
+      after <- a
+        .run(Request[IO](Method.GET, uri"/projects/demo/totals"))
+        .flatMap(_.bodyText.compile.string)
+    yield
+      r.status shouldBe Status.UnprocessableContent
+      body should include("gehört nicht zur Kategorie")
+      parse(after).flatMap(_.hcursor.downField("net").as[String]) shouldBe Right("21118.50")
+  }
+
+  "POST favorite for an unknown project is 404" in {
+    run(Request[IO](Method.POST, uri"/ui/projects/nope/categories/gauben/favorite/gauben-b"))
+      .asserting(_._1 shouldBe Status.NotFound)
   }

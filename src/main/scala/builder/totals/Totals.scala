@@ -1,7 +1,6 @@
 package builder.totals
 
 import builder.domain.*
-import cats.syntax.all.*
 
 enum CountedReason:
   case Favorite, OnlyOffer
@@ -34,58 +33,34 @@ final case class ProjectTotals(
     categories.collect { case CategoryTotal(c, CategoryStatus.NeedsDecision(_)) => c }
   def isComplete: Boolean = missingCategories.isEmpty && undecidedCategories.isEmpty
 
-enum TotalsError:
-  case CurrencyMismatch(offerId: OfferId, expected: Currency, actual: Currency)
-  case UnknownFavorite(category: Category, offerId: OfferId)
-
 object Totals:
-
-  /** Categories in scope: those with a work package, an offer or a favorite, in enum order. */
-  private def categoriesInScope(p: Project): List[Category] =
-    val used =
-      p.workPackages.map(_.category).toSet ++ p.offers.map(_.category) ++ p.favorites.keySet
-    Category.values.toList.filter(used.contains)
-
-  private def checkCurrency(expected: Currency)(o: Offer): Either[TotalsError, Offer] =
-    val monies = List(o.net.value, o.vat.value, o.gross.value) ++
-      o.lineItems.flatMap(li => List(li.unitPrice.value, li.total.value))
-    monies
-      .find(_.currency != expected)
-      .map(m => TotalsError.CurrencyMismatch(o.id, expected, m.currency))
-      .toLeft(o)
 
   private def counted(o: Offer, r: CountedReason): CategoryStatus =
     CategoryStatus.Counted(o.id, o.contractor.value, o.net.value, o.gross.value, r)
 
-  /** Which offer (if any) counts for one category. Never picks among several on its own. */
-  def statusFor(
-      category: Category,
-      offers: List[Offer],
-      favorite: Option[OfferId]
-  ): Either[TotalsError, CategoryStatus] =
-    favorite match
-      case Some(fav) =>
-        offers
-          .find(_.id == fav)
-          .map(counted(_, CountedReason.Favorite))
-          .toRight(TotalsError.UnknownFavorite(category, fav))
-      case None =>
+  /** Which offer (if any) counts for one category. Never picks among several on its own. A favorite
+    * is resolved among `offers`; [[Project.from]] guarantees it is one of them.
+    */
+  def statusFor(offers: List[Offer], favorite: Option[OfferId]): CategoryStatus =
+    favorite.flatMap(fav => offers.find(_.id == fav)) match
+      case Some(fav) => counted(fav, CountedReason.Favorite)
+      case None      =>
         offers match
-          case Nil                     => Right(CategoryStatus.NoOffer)
-          case only :: Nil             => Right(counted(only, CountedReason.OnlyOffer))
-          case several @ (_ :: _ :: _) => Right(CategoryStatus.NeedsDecision(several.map(_.id)))
+          case Nil                     => CategoryStatus.NoOffer
+          case only :: Nil             => counted(only, CountedReason.OnlyOffer)
+          case several @ (_ :: _ :: _) => CategoryStatus.NeedsDecision(several.map(_.id))
 
-  def compute(project: Project): Either[TotalsError, ProjectTotals] =
+  /** Running total over the project's categories, in the project's category order. Total because
+    * [[Project.from]] already validated currencies, category references and favorites.
+    */
+  def compute(project: Project): ProjectTotals =
     val cur = project.currency
-    for
-      offers <- project.offers.traverse(checkCurrency(cur))
-      byCat = offers.groupBy(_.category)
-      cats <- categoriesInScope(project).traverse(c =>
-        statusFor(c, byCat.getOrElse(c, Nil), project.favorites.lift(c)).map(CategoryTotal(c, _))
-      )
-      counted = cats.collect { case CategoryTotal(_, s: CategoryStatus.Counted) => s }
-    yield
-      // checkCurrency guarantees every counted amount is in `cur`, so plain minor-unit sums are safe.
-      def total(f: CategoryStatus.Counted => Money): Money =
-        Money(MinorUnits(counted.map(f(_).minor.value).sum), cur)
-      ProjectTotals(project.id, cur, cats, total(_.net), total(_.gross))
+    val byCat = project.offers.groupBy(_.category)
+    val cats = project.categories.map(c =>
+      CategoryTotal(c, statusFor(byCat.getOrElse(c.id, Nil), project.favorites.lift(c.id)))
+    )
+    val counted = cats.collect { case CategoryTotal(_, s: CategoryStatus.Counted) => s }
+    // Project.from guarantees every amount is in `cur`, so plain minor-unit sums are safe.
+    def total(f: CategoryStatus.Counted => Money): Money =
+      Money(MinorUnits(counted.map(f(_).minor.value).sum), cur)
+    ProjectTotals(project.id, cur, cats, total(_.net), total(_.gross))
