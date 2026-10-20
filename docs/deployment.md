@@ -18,7 +18,7 @@ object storage for uploaded plan/offer PDFs and images, plus logs.
 - **Verdict:** Vercel is a poor fit for an always-on JVM Ember backend. The realistic pattern is to run the **backend container
   on a container host that keeps instances running**, such as Fly.io, Render, Google Cloud Run with min-instances >= 1, or Railway.
   Use **Vercel only for a future web frontend**, rewriting `/api/*` to the backend. You could run on Vercel's Container Runtime if cold
-  starts are acceptable or the JVM is tuned (CDS/AppCDS, CRaC is not available, or a GraalVM native-image build). Treat that as an experiment, not the default.
+  starts are acceptable or the JVM is tuned (for example CDS/AppCDS or a GraalVM native-image build). Treat that as an experiment, not the default.
 
 ## 1. Compute on Vercel
 
