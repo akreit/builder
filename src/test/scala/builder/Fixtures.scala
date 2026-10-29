@@ -133,7 +133,11 @@ object RawOffers:
 
   /** Returns `result` for every file and remembers how often it was called. */
   final class FakeExtractor(result: Either[ExtractionError, RawOffer]) extends OfferExtractor[IO]:
-    def extract(file: Array[Byte], fileType: OfferFileType): IO[Either[ExtractionError, RawOffer]] =
+    def extract(
+        file: Array[Byte],
+        fileType: OfferFileType,
+        known: List[builder.domain.Leistung]
+    ): IO[Either[ExtractionError, RawOffer]] =
       IO.pure(result)
 
   /** Like [[FakeExtractor]], and counts its calls. */
@@ -141,5 +145,46 @@ object RawOffers:
       extends OfferExtractor[IO]:
     private val ref = cats.effect.Ref.unsafe[IO, Int](0)
     def calls: IO[Int] = ref.get
-    def extract(file: Array[Byte], fileType: OfferFileType): IO[Either[ExtractionError, RawOffer]] =
+    def extract(
+        file: Array[Byte],
+        fileType: OfferFileType,
+        known: List[builder.domain.Leistung]
+    ): IO[Either[ExtractionError, RawOffer]] =
       ref.update(_ + 1).as(result)
+
+  /** Returns `results` one after another (the last one repeatedly) and records the names of the
+    * known Leistungen it was given per call.
+    */
+  final class RecordingExtractor(results: List[RawOffer]) extends OfferExtractor[IO]:
+    private val ref = cats.effect.Ref.unsafe[IO, List[List[String]]](Nil)
+    def knownPerCall: IO[List[List[String]]] = ref.get
+    def extract(
+        file: Array[Byte],
+        fileType: OfferFileType,
+        known: List[Leistung]
+    ): IO[Either[ExtractionError, RawOffer]] =
+      ref
+        .modify { calls =>
+          val n = calls.size
+          (calls :+ known.map(_.name.value), results.drop(n).headOption.orElse(results.lastOption))
+        }
+        .map(_.toRight(ExtractionError.UnexpectedResponse("keine Antwort")))
+
+  /** [[dachfenster]] mapped onto the seeded Leistungen; proposes "Gerüst" as a new one and reads
+    * "Innenausbau" as excluded, "Entsorgung" as unclear.
+    */
+  val dachfensterMitLeistungen: RawOffer = dachfenster.copy(
+    lineItems = List(
+      dachfenster.lineItems(0).copy(leistung = Some("dachfenster-fenster")),
+      dachfenster.lineItems(1).copy(leistung = Some("neu-1"))
+    ),
+    neueLeistungen = Some(List(RawNeueLeistung("neu-1", "Gerüst"))),
+    abdeckung = Some(
+      List(
+        RawAbdeckung("dachfenster-fenster", "enthalten", 2, Confidence.High),
+        RawAbdeckung("dachfenster-einbau", "unklar", 2, Confidence.Medium),
+        RawAbdeckung("dachfenster-innenausbau", "ausgeschlossen", 3, Confidence.High),
+        RawAbdeckung("neu-1", "enthalten", 2, Confidence.Low)
+      )
+    )
+  )

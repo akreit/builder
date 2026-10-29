@@ -27,7 +27,7 @@ class ClaudeOfferExtractorSpec extends AsyncFreeSpec with AsyncIOSpec with Match
 
   private def contentTypes(fileType: OfferFileType): List[String] =
     ClaudeOfferExtractor
-      .requestBody("claude-sonnet-5-5", pdf, fileType)
+      .requestBody("claude-sonnet-5-5", pdf, fileType, Nil)
       .hcursor
       .downField("messages")
       .downArray
@@ -40,6 +40,23 @@ class ClaudeOfferExtractorSpec extends AsyncFreeSpec with AsyncIOSpec with Match
     contentTypes(OfferFileType.Pdf) shouldBe List("document", "text")
     contentTypes(OfferFileType.Png) shouldBe List("image", "text")
     contentTypes(OfferFileType.Jpeg) shouldBe List("image", "text")
+  }
+
+  "the category's existing Leistungen are sent with the prompt, so items map onto them" in {
+    val known = SampleData.leistungen.toOption.toList.flatten.map(_._2)
+    val text = ClaudeOfferExtractor
+      .requestBody("claude-sonnet-5-5", pdf, OfferFileType.Pdf, known)
+      .hcursor
+      .downField("messages")
+      .downArray
+      .downField("content")
+      .downN(1)
+      .downField("text")
+      .as[String]
+      .getOrElse("")
+    text should include("dachfenster-einbau: Einbau")
+    text should include("Fenster inkl. Zubehör")
+    text should include("Bevorzuge immer eine vorhandene Leistung")
   }
 
   "the structured JSON answer of a Messages API response is read as the offer" in {
@@ -69,7 +86,7 @@ class ClaudeOfferExtractorSpec extends AsyncFreeSpec with AsyncIOSpec with Match
     val noNetwork =
       Client[IO](_ => cats.effect.Resource.eval(IO.raiseError(IllegalStateException("network"))))
     ClaudeOfferExtractor(noNetwork, None, "m")
-      .extract(pdf, OfferFileType.Pdf)
+      .extract(pdf, OfferFileType.Pdf, Nil)
       .asserting(_ shouldBe Left(ExtractionError.MissingApiKey))
   }
 
@@ -121,7 +138,7 @@ class ClaudeOfferExtractorSpec extends AsyncFreeSpec with AsyncIOSpec with Match
         calls <- Ref.of[IO, Int](0)
         start <- IO.monotonic
         result <- ClaudeOfferExtractor(scripted(calls, answers), testKey, "m")
-          .extract(pdf, OfferFileType.Pdf)
+          .extract(pdf, OfferFileType.Pdf, Nil)
         end <- IO.monotonic
         n <- calls.get
       yield (result, n, end - start)
@@ -233,13 +250,17 @@ class ClaudeOfferExtractorSpec extends AsyncFreeSpec with AsyncIOSpec with Match
           running <- Ref.of[IO, Int](0)
           peak <- Ref.of[IO, Int](0)
           slow = new OfferExtractor[IO]:
-            def extract(file: Array[Byte], fileType: OfferFileType) =
+            def extract(
+                file: Array[Byte],
+                fileType: OfferFileType,
+                known: List[builder.domain.Leistung]
+            ) =
               running
                 .updateAndGet(_ + 1)
                 .flatMap(n => peak.update(_.max(n))) >> IO.sleep(1.second) >>
                 running.update(_ - 1).as(Right(RawOffers.dachfenster))
           bounded <- OfferExtractor.bounded(slow, permits = 2)
-          results <- List.fill(5)(bounded.extract(pdf, OfferFileType.Pdf)).parSequence
+          results <- List.fill(5)(bounded.extract(pdf, OfferFileType.Pdf, Nil)).parSequence
           max <- peak.get
         yield (results.size, max)
       )

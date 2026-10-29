@@ -2,6 +2,7 @@ package builder.extraction
 
 import builder.domain.Confidence
 import builder.domain.PageNumber
+import builder.extraction.Field.given
 import io.circe.Codec
 import io.circe.Decoder
 import io.circe.Encoder
@@ -36,7 +37,9 @@ final case class RawLineItem(
     manufacturer: Field,
     model: Field,
     unitPrice: Field,
-    total: Field
+    total: Field,
+    /** Id of an existing Leistung or key of a proposed new one ([[RawNeueLeistung.key]]). */
+    leistung: Option[String] = None
 ) derives Codec.AsObject:
   /** (German label, field) pairs, in display order. */
   def labelled: List[(String, Field)] = List(
@@ -49,6 +52,17 @@ final case class RawLineItem(
     "Einzelpreis" -> unitPrice,
     "Gesamtpreis" -> total
   )
+
+/** A coarse Leistung the extractor proposes for the category; `key` is how line items and coverage
+  * entries of this answer refer to it.
+  */
+final case class RawNeueLeistung(key: String, name: String) derives Codec.AsObject
+
+/** Whether the offer covers a Leistung (existing id or new key). `status` is a
+  * [[builder.domain.Coverage]] code; anything else is read as "unklar".
+  */
+final case class RawAbdeckung(leistung: String, status: String, page: Int, confidence: Confidence)
+    derives Codec.AsObject
 
 /** Everything the extractor read from one offer document. Amounts, quantities and the VAT rate are
   * decimal strings ("1234.50"), dates ISO strings ("2026-10-01").
@@ -63,7 +77,9 @@ final case class RawOffer(
     vat: Field,
     gross: Field,
     notes: List[Field],
-    exclusions: List[Field]
+    exclusions: List[Field],
+    neueLeistungen: Option[List[RawNeueLeistung]] = None,
+    abdeckung: Option[List[RawAbdeckung]] = None
 ) derives Codec.AsObject:
   /** Offer-level (German label, field) pairs, in display order. */
   def labelled: List[(String, Field)] = List(

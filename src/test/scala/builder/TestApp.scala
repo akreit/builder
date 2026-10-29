@@ -21,7 +21,7 @@ object TestApp extends EitherValues:
 
   def resource(dir: Path, extractor: OfferExtractor[IO]): Resource[IO, TestApp] =
     SqliteProjectRepository
-      .resource(dir.resolve("builder.db"), List(sample))
+      .resource(dir.resolve("builder.db"), List(sample), SampleData.leistungen.value)
       .map(repo =>
         TestApp(
           Api(repo, sample.id, extractor, FileStore(dir.resolve("angebote"))).routes.orNotFound,
