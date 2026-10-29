@@ -13,3 +13,11 @@ enum DomainError:
   case VatMismatch(expected: Money, actual: Money)
   case LineItemsMismatch(lineItemsTotal: Money, net: Money)
   case DuplicateOfferId(offerId: String)
+  case InvalidCategoryName(raw: String)
+  case DuplicateCategoryId(categoryId: String)
+
+  /** A work package, offer or favorite references a category the project does not have. */
+  case UnknownCategory(referencedBy: String, categoryId: String)
+  case LineItemTotalMismatch(expected: Money, actual: Money)
+  case OfferCurrencyMismatch(offerId: String, expected: Currency, actual: Currency)
+  case FavoriteNotInCategory(categoryId: String, offerId: String)

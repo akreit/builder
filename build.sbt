@@ -9,6 +9,7 @@ val tapirV = "1.14.0"
 val circeV = "0.14.17"
 val scalatestV = "3.2.20"
 val laikaV = "1.3.2"
+val scalatagsV = "0.13.1"
 
 lazy val root = (project in file("."))
   .settings(
@@ -22,6 +23,8 @@ lazy val root = (project in file("."))
       "com.softwaremill.sttp.tapir" %% "tapir-core" % tapirV,
       "com.softwaremill.sttp.tapir" %% "tapir-http4s-server" % tapirV,
       "com.softwaremill.sttp.tapir" %% "tapir-json-circe" % tapirV,
+      "com.softwaremill.sttp.tapir" %% "tapir-files" % tapirV,
+      "com.lihaoyi" %% "scalatags" % scalatagsV,
       "io.circe" %% "circe-parser" % circeV % Test,
       "org.scalatest" %% "scalatest" % scalatestV % Test,
       "org.typelevel" %% "cats-effect-testing-scalatest" % "1.8.0" % Test,

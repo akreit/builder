@@ -20,6 +20,12 @@ final case class Money(minor: MinorUnits, currency: Currency):
       MoneyError.CurrencyMismatch(currency, other.currency)
     )
 
+  /** `this * factor`, rounded HALF_UP to the currency's minor unit. */
+  def times(factor: BigDecimal): Money =
+    val minorUnits =
+      (BigDecimal(minor.value) * factor).setScale(0, BigDecimal.RoundingMode.HALF_UP).toBigInt
+    Money(MinorUnits(minorUnits), currency)
+
   def isNegative: Boolean = minor.value < 0
 
   def toDecimal: BigDecimal = BigDecimal(minor.value, currency.minorDigits)
