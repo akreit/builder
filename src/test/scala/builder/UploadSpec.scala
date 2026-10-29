@@ -282,3 +282,107 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
         total shouldBe "36916.50"
     )
   }
+
+  private def uploadRows(dir: java.nio.file.Path): IO[Int] =
+    IO.blocking {
+      val ds = org.sqlite.SQLiteDataSource()
+      ds.setUrl(s"jdbc:sqlite:${dir.resolve("builder.db")}")
+      scala.util.Using.resource(ds.getConnection())(c =>
+        scala.util.Using.resource(c.createStatement())(st =>
+          scala.util.Using.resource(st.executeQuery("SELECT count(*) FROM uploads"))(rs =>
+            if rs.next() then rs.getInt(1) else 0
+          )
+        )
+      )
+    }
+
+  "cancelling an upload while it is being read leaves neither file nor row" in {
+    for
+      started <- cats.effect.Deferred[IO, Unit]
+      hanging = new OfferExtractor[IO]:
+        def extract(file: Array[Byte], fileType: OfferFileType) =
+          started.complete(()) >> IO.never
+      result <- TestApp.tempDir.use(dir =>
+        TestApp.resource(dir, hanging).use { app =>
+          for
+            fiber <- upload(app, pdf).start
+            _ <- started.get
+            savedWhileReading <- storedFiles(app)
+            _ <- fiber.cancel
+            files <- storedFiles(app)
+            rows <- uploadRows(dir)
+          yield (savedWhileReading.size, files, rows)
+        }
+      )
+    yield result shouldBe (1, Nil, 0)
+  }
+
+  "when the row cannot be inserted, the saved file is deleted" in {
+    TestApp.tempDir.use(dir =>
+      for
+        _ <- TestApp.resource(dir, FakeExtractor(Right(dachfenster))).use(_ => IO.unit)
+        _ <- sql(
+          dir,
+          "CREATE TRIGGER kein_upload BEFORE INSERT ON uploads BEGIN SELECT RAISE(ABORT, 'nein'); END"
+        )
+        result <- TestApp.resource(dir, FakeExtractor(Right(dachfenster))).use { app =>
+          for
+            (status, body) <- upload(app, pdf)
+            files <- storedFiles(app)
+          yield (status, body, files)
+        }
+        rows <- uploadRows(dir)
+      yield
+        val (status, body, files) = result
+        status shouldBe Status.InternalServerError
+        body should include("Datenbankfehler")
+        files shouldBe Nil
+        rows shouldBe 0
+    )
+  }
+
+  "a version-3 database keeps its rows on migration and enforces the composite foreign key" in {
+    import io.circe.syntax.*
+    val json = dachfenster.asJson.noSpaces.replace("'", "''")
+    TestApp.tempDir.use(dir =>
+      for
+        _ <- sql(
+          dir,
+          """CREATE TABLE uploads(id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
+            |  category_id TEXT NOT NULL, file_name TEXT NOT NULL, file_type TEXT NOT NULL,
+            |  created_at TEXT NOT NULL, extraction TEXT, failure TEXT,
+            |  extraction_version INTEGER)""".stripMargin,
+          "CREATE TABLE offers(id TEXT PRIMARY KEY, project_id TEXT NOT NULL)",
+          """CREATE TABLE favorites(project_id TEXT NOT NULL, category_id TEXT NOT NULL,
+            |  offer_id TEXT NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
+            |  PRIMARY KEY (project_id, category_id))""".stripMargin,
+          s"""INSERT INTO uploads VALUES ('upl-v3', 'demo', 'dachfenster', 'v3.pdf', 'pdf',
+             |  '2026-10-02T10:00:00Z', '$json', NULL, 1)""".stripMargin,
+          "INSERT INTO offers VALUES ('upl-v3', 'demo'), ('daemmung-b', 'demo')",
+          "INSERT INTO favorites VALUES ('demo', 'daemmung', 'daemmung-b'), ('demo', 'dachfenster', 'upl-v3')",
+          "PRAGMA user_version = 3"
+        )
+        result <- TestApp
+          .resource(dir, FakeExtractor(Right(dachfenster)))
+          .use(app => page(app).product(net(app)))
+        // Same offer id, other project: no matching (project_id, id) row in offers.
+        foreign <- sql(
+          dir,
+          "PRAGMA foreign_keys = ON",
+          "INSERT INTO favorites VALUES ('anderes', 'daemmung', 'daemmung-b')"
+        ).attempt
+        own <- sql(
+          dir,
+          "PRAGMA foreign_keys = ON",
+          "INSERT INTO favorites VALUES ('demo', 'gauben', 'daemmung-b')"
+        ).attempt
+      yield
+        val (html, total) = result
+        html should include("Zimmerei Erfunden GmbH")
+        html should not include "wird ignoriert"
+        // 21.118,50 € + Dämmung favorite (10.788,00 €) + Dachfenster favorite upl-v3 (5.010,00 €)
+        total shouldBe "36916.50"
+        foreign.left.map(_.getMessage.contains("FOREIGN KEY")) shouldBe Left(true)
+        own.isRight shouldBe true
+    )
+  }

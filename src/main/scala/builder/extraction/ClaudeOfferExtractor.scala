@@ -133,11 +133,14 @@ object ClaudeOfferExtractor:
   val DefaultModel = "claude-sonnet-5-5"
   private val endpoint: Uri = uri"https://api.anthropic.com/v1/messages"
 
-  /** Failures before the request reached Claude (or the connection broke): safe to send again. */
+  /** Failures before the request reached Claude: safe to send again. Timeouts and broken responses
+    * (e.g. Ember's ReadTimeout, ReachedEndOfStream) are not: Claude may have read the file already
+    * and would bill twice.
+    */
   private val connectionErrors: List[Class[? <: Throwable]] = List(
     classOf[java.net.ConnectException],
-    classOf[java.nio.channels.ClosedChannelException],
-    classOf[org.http4s.ember.core.EmberException]
+    classOf[java.net.UnknownHostException],
+    classOf[java.nio.channels.ClosedChannelException]
   )
 
   private def isConnectionError(e: Throwable): Boolean = connectionErrors.exists(_.isInstance(e))

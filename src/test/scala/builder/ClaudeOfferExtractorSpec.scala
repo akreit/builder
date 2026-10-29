@@ -200,6 +200,24 @@ class ClaudeOfferExtractorSpec extends AsyncFreeSpec with AsyncIOSpec with Match
     }
   }
 
+  "Ember read timeouts and cut-off responses are attempted exactly once" in {
+    List[Throwable](
+      org.http4s.ember.core.EmberException.ReadTimeout(4.minutes),
+      org.http4s.ember.core.EmberException.ReachedEndOfStream()
+    ).traverse(e => run(List(IO.raiseError(e), IO.pure(success))).map(r => (r._1, r._2)))
+      .asserting(
+        _ shouldBe List(
+          (Left(ExtractionError.Transport("ReadTimeout")), 1),
+          (Left(ExtractionError.Transport("ReachedEndOfStream")), 1)
+        )
+      )
+  }
+
+  "unknown hosts are retried like refused connections" in {
+    run(List(IO.raiseError(java.net.UnknownHostException("api.anthropic.com")), IO.pure(success)))
+      .asserting((result, calls, _) => (result, calls) shouldBe (Right(RawOffers.dachfenster), 2))
+  }
+
   "all attempts together are cut off after 6 minutes" in {
     run(List(IO.never)).asserting { (result, calls, elapsed) =>
       result shouldBe Left(ExtractionError.TimedOut)
