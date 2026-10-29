@@ -260,6 +260,26 @@ object Api:
           case code   => Coverage.fromCode(code).map(Some(_)).toRight(s"Unbekannter Status: $code")
         }
         (offer, leistung("leistung"), status).mapN(Edit.SetCoverage(_, _, _))
+      case "bewertung" =>
+        val key = field("firma").flatMap(ContractorKey.of(_).toRight("Feld 'firma' fehlt"))
+        val note = form.get("notiz").map(_.trim).getOrElse("")
+        val rating = form.get("sterne").map(_.trim).filter(_.nonEmpty) match
+          case None    => Right(None)
+          case Some(n) =>
+            n.toIntOption
+              .toRight(s"Ungültige Sternezahl: $n")
+              .flatMap(i => domain(Stars.from(i)))
+              .map(st => Some(Rating(st, note)))
+        (key, rating).mapN(Edit.RateContractor(_, _))
+      case "gewichtung" =>
+        Criterion.values.toList
+          .traverse(c =>
+            field(s"gewicht-${Criterion.code(c)}")
+              .flatMap(_.toIntOption.toRight(s"Ungültige Gewichtung für ${Criterion.label(c)}"))
+              .map(c -> _)
+          )
+          .flatMap(ws => domain(Weights.from(ws.toMap)))
+          .map(Edit.SetWeights(_))
       case other => Left(s"Unbekannte Aktion: $other")
     }
 

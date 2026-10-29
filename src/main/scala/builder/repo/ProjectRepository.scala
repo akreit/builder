@@ -70,7 +70,9 @@ final case class ProjectView(
     warnings: List[String],
     leistungen: List[Leistung],
     assignments: List[ItemAssignment],
-    coverage: List[CoverageEntry]
+    coverage: List[CoverageEntry],
+    ratings: Map[ContractorKey, Rating],
+    weights: Weights
 )
 
 /** A manual change to categories, Leistungen, item assignments or coverage. Manual changes are
@@ -96,6 +98,10 @@ enum Edit:
 
   /** `None` removes the manual status, so the extracted one applies again. */
   case SetCoverage(offer: OfferId, leistung: LeistungId, coverage: Option[Coverage])
+
+  /** `None` removes the rating: the contractor is "nicht bewertet" again. */
+  case RateContractor(contractor: ContractorKey, rating: Option[Rating])
+  case SetWeights(weights: Weights)
 
 trait ProjectRepository:
   def find(id: ProjectId): IO[Either[RepoError, ProjectView]]
@@ -272,7 +278,16 @@ final class SqliteProjectRepository private (
               warnings :+ s"Gespeicherter Favorit $o für Kategorie $c ist nicht (mehr) gültig und wird ignoriert"
             )
     }
-    ProjectView(withFavs, views, decoded.collect { case Left(w) => w } ++ ignored, Nil, Nil, Nil)
+    ProjectView(
+      withFavs,
+      views,
+      decoded.collect { case Left(w) => w } ++ ignored,
+      Nil,
+      Nil,
+      Nil,
+      Map.empty,
+      Weights.default
+    )
 
   private def load(id: ProjectId): IO[Either[RepoError, ProjectView]] =
     seeds.lift(id) match
@@ -285,6 +300,18 @@ final class SqliteProjectRepository private (
           ls <- EitherT(loadLeistungen(id))
           as <- EitherT(loadAssignments(id))
           cs <- EitherT(loadCoverage(id))
+          rs <- EitherT(
+            db.query(
+              "SELECT contractor_key, stars, note FROM ratings WHERE project_id = ?",
+              List(Some(id.value))
+            )(rs => (rs.getString("contractor_key"), rs.getInt("stars"), rs.getString("note")))
+          )
+          ws <- EitherT(
+            db.query(
+              "SELECT criterion, weight FROM weights WHERE project_id = ?",
+              List(Some(id.value))
+            )(rs => rs.getString("criterion") -> rs.getInt("weight"))
+          )
         yield
           val (base, catWarnings) = withCategories(seed, cats)
           val view = build(base, rows, favorites)
@@ -299,7 +326,21 @@ final class SqliteProjectRepository private (
             warnings = catWarnings ++ view.warnings,
             leistungen = leistungen,
             assignments = as.flatMap(toAssignment),
-            coverage = cs.flatMap(toCoverage)
+            coverage = cs.flatMap(toCoverage),
+            ratings = rs
+              .flatMap((k, n, note) =>
+                (ContractorKey.of(k), Stars.from(n).toOption)
+                  .mapN((key, stars) => key -> Rating(stars, note))
+              )
+              .toMap,
+            // Stored weights complete the defaults, so criteria added later get their default.
+            weights = Weights
+              .from(
+                Criterion.values.toList
+                  .map(c => c -> Weights.default.of(c))
+                  .toMap ++ ws.flatMap((c, w) => Criterion.fromCode(c).map(_ -> w))
+              )
+              .getOrElse(Weights.default)
           )
         ).value
 
@@ -592,6 +633,27 @@ final class SqliteProjectRepository private (
             target.map(_.value)
           )
         )
+      case Edit.RateContractor(c, rating) =>
+        Right(rating match
+          case Some(r) =>
+            List(
+              "INSERT OR REPLACE INTO ratings(project_id, contractor_key, stars, note) VALUES (?, ?, ?, ?)" ->
+                List(p, Some(c.value), Some(r.stars.value.toString), Some(r.note))
+            )
+          case None =>
+            List(
+              "DELETE FROM ratings WHERE project_id = ? AND contractor_key = ?" -> List(
+                p,
+                Some(c.value)
+              )
+            ))
+      case Edit.SetWeights(ws) =>
+        Right(
+          Criterion.values.toList.map(c =>
+            "INSERT OR REPLACE INTO weights(project_id, criterion, weight) VALUES (?, ?, ?)" ->
+              List(p, Some(Criterion.code(c)), Some(ws.of(c).toString))
+          )
+        )
       case Edit.SetCoverage(o, l, coverage) =>
         for
           (u, _) <- upload(o)
@@ -754,6 +816,14 @@ object SqliteProjectRepository:
         |  manual INTEGER NOT NULL, PRIMARY KEY (project_id, offer_id, leistung_id, manual),
         |  FOREIGN KEY (project_id, offer_id) REFERENCES offers(project_id, id) ON DELETE CASCADE,
         |  FOREIGN KEY (project_id, leistung_id) REFERENCES leistungen(project_id, id))""".stripMargin
+    ),
+    // Ranking: reference ratings per contractor (by normalised name) and criterion weights.
+    List(
+      """CREATE TABLE ratings(project_id TEXT NOT NULL, contractor_key TEXT NOT NULL,
+        |  stars INTEGER NOT NULL CHECK (stars BETWEEN 1 AND 5), note TEXT NOT NULL,
+        |  PRIMARY KEY (project_id, contractor_key))""".stripMargin,
+      """CREATE TABLE weights(project_id TEXT NOT NULL, criterion TEXT NOT NULL,
+        |  weight INTEGER NOT NULL, PRIMARY KEY (project_id, criterion))""".stripMargin
     )
   )
 

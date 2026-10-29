@@ -2,6 +2,7 @@ package builder.ui
 
 import builder.domain.*
 import builder.extraction.*
+import builder.ranking.*
 import builder.repo.*
 import builder.totals.*
 import scalatags.Text.TypedTag
@@ -36,7 +37,8 @@ object Pages:
       |table.matrix td,table.matrix th{vertical-align:top;border:1px solid #e3e3e3}table.matrix th.leistung{min-width:9rem}
       |.st-enthalten{background:#e3f4e3}.st-nicht{background:#f3f3f3}.st-ausgeschlossen{background:#f8dede}.st-unklar{background:#fff3cd}
       |td.pruefen,div.pruefen{outline:2px solid #f0ad4e;outline-offset:-2px}form.aendern{display:inline-block;margin:.15rem .25rem .15rem 0}
-      |table.matrix select{font-size:.8rem}details summary{cursor:pointer}section.leistungen{margin-top:1rem}""".stripMargin
+      |table.matrix select{font-size:.8rem}details summary{cursor:pointer}section.leistungen{margin-top:1rem}
+      |table.rangliste td{vertical-align:top}td.gesamt{font-size:1.05rem}section.gewichtung{margin:1rem 0}section.gewichtung input[type=number]{width:4rem}""".stripMargin
 
   private def statusBadge(s: CategoryStatus): Frag = s match
     case CategoryStatus.Counted(_, _, _, _, CountedReason.Favorite) =>
@@ -486,6 +488,124 @@ object Pages:
       )
     )
 
+  private def points(d: BigDecimal): String = Format.decimal(d)
+
+  private def criterionCell(cs: CriterionScore): Frag = cs.result match
+    case CriterionResult.Scored(p, detail) =>
+      td(cls := "betrag")(strong(s"${points(p)} Pkt."), div(cls := "seite")(detail))
+    case CriterionResult.NotAvailable(reason) =>
+      td(cls := "betrag pruefen")(strong(reason))
+
+  private def ratingForm(project: Project, e: RankedOffer): Frag =
+    editForm(project, List("aktion" -> "bewertung", "firma" -> e.contractor), auto = false)(
+      select(name := "sterne", attr("aria-label") := s"Sterne für ${e.contractor}")(
+        option(value := "", if e.rating.isEmpty then selected := "selected" else frag())(
+          "nicht bewertet"
+        ),
+        (1 to 5).map(n =>
+          option(
+            value := n.toString,
+            if e.rating.exists(_.stars.value == n) then selected := "selected" else frag()
+          )(
+            "★" * n
+          )
+        )
+      ),
+      input(
+        name := "notiz",
+        value := e.rating.fold("")(_.note),
+        placeholder := "Notiz zu Referenzen",
+        attr("aria-label") := s"Notiz zu ${e.contractor}"
+      ),
+      button(tpe := "submit")("Speichern")
+    )
+
+  private def rankingRow(project: Project, rank: Option[Int], e: RankedOffer): Frag =
+    tr(attr("data-firma") := e.contractor)(
+      td(rank.fold("–")(r => s"$r.")),
+      td(
+        strong(e.contractor),
+        div(cls := "seite")(
+          e.price.comparable.fold("kein Vergleichspreis")(m =>
+            s"Vergleichspreis ${Format.money(m)}"
+          )
+        ),
+        if e.price.missing.isEmpty then frag()
+        else
+          div(cls := "pruefen")(
+            s"Fehlt gegenüber anderen: ${e.price.missing.map(_.name.value).mkString(", ")}"
+          )
+        ,
+        e.rating
+          .filter(_.note.nonEmpty)
+          .fold(frag())(r => div(cls := "hinweis")(s"Notiz: ${r.note}"))
+      ),
+      td(cls := "betrag gesamt")(
+        e.total.fold[Frag](span(cls := "hinweis")("nicht bewertbar"))(t =>
+          strong(s"${points(t)} Pkt.")
+        )
+      ),
+      e.criteria.map(criterionCell),
+      td(ratingForm(project, e))
+    )
+
+  private def rankingSection(view: ProjectView, category: Category): Frag =
+    val project = view.project
+    val r =
+      Ranking.build(Matrix.build(view, category.id), view.ratings, view.weights, project.currency)
+    if r.ranked.isEmpty && r.unranked.isEmpty then frag()
+    else
+      tags2.section(cls := "ranking", attr("data-kategorie") := category.id.value)(
+        h3("Rangliste"),
+        p(cls := "hinweis")(
+          if r.common.isEmpty then
+            "Preisvergleich nicht möglich: keine Leistung ist in allen Angeboten mit Preis enthalten."
+          else
+            s"Preis verglichen auf gemeinsamen Leistungen: ${r.common.map(_.name.value).mkString(", ")}. " +
+              "Günstigstes Angebot = 100 Punkte, die anderen anteilig. Referenzen: 20 Punkte je Stern."
+        ),
+        table(cls := "rangliste")(
+          thead(
+            tr(
+              th("Rang"),
+              th("Firma"),
+              th(cls := "betrag")("Gesamt"),
+              Criterion.values.toList.map(c =>
+                th(cls := "betrag")(s"${Criterion.label(c)} (${view.weights.of(c)} %)")
+              ),
+              th("Referenzen bewerten")
+            )
+          ),
+          tbody(
+            r.ranked.zipWithIndex.map((e, i) => rankingRow(project, Some(i + 1), e)),
+            r.unranked.map(e => rankingRow(project, None, e))
+          )
+        ),
+        if r.unranked.isEmpty then frag()
+        else p(cls := "hinweis")("Ohne Rang: nicht alle gewichteten Kriterien sind bewertet.")
+      )
+
+  private def weightsForm(view: ProjectView): Frag =
+    tags2.section(cls := "gewichtung", id := "gewichtung")(
+      h2("Gewichtung der Rangliste"),
+      editForm(view.project, List("aktion" -> "gewichtung"), auto = false)(
+        Criterion.values.toList.map(c =>
+          label(
+            s"${Criterion.label(c)} ",
+            input(
+              tpe := "number",
+              name := s"gewicht-${Criterion.code(c)}",
+              attr("min") := "0",
+              attr("max") := "100",
+              value := view.weights.of(c).toString
+            ),
+            " % "
+          )
+        ),
+        button(tpe := "submit")("Gewichtung speichern")
+      )
+    )
+
   private def categorySection(view: ProjectView, ct: CategoryTotal): Frag =
     val project = view.project
     val uploads = view.uploads.filter(_.upload.category == ct.category.id)
@@ -510,6 +630,7 @@ object Pages:
       ,
       uploads.map(uploadBlock(_, project.currency)),
       leistungenSection(view, ct.category),
+      rankingSection(view, ct.category),
       uploadForm(project, ct.category)
     )
 
@@ -525,6 +646,7 @@ object Pages:
         )
       ,
       totals.categories.map(ct => categorySection(view, ct)),
+      weightsForm(view),
       editForm(view.project, List("aktion" -> "kategorie-neu"), auto = false)(
         input(
           name := "name",
@@ -607,9 +729,12 @@ object Pages:
       s"MwSt. ${Format.money(actual)} statt erwartet ${Format.money(expected)}"
     case DomainError.LineItemsMismatch(sum, net) =>
       s"Summe der Positionen ${Format.money(sum)} ≠ Netto ${Format.money(net)}"
-    case DomainError.DuplicateOfferId(o)             => s"Angebot doppelt vorhanden: $o"
-    case DomainError.InvalidCategoryName(raw)        => s"Ungültiger Kategoriename: '$raw'"
-    case DomainError.InvalidLeistungName(raw)        => s"Ungültiger Name der Leistung: '$raw'"
+    case DomainError.DuplicateOfferId(o)      => s"Angebot doppelt vorhanden: $o"
+    case DomainError.InvalidCategoryName(raw) => s"Ungültiger Kategoriename: '$raw'"
+    case DomainError.InvalidLeistungName(raw) => s"Ungültiger Name der Leistung: '$raw'"
+    case DomainError.InvalidStars(n)          => s"Bewertung muss 1 bis 5 Sterne haben, nicht $n"
+    case DomainError.InvalidWeights(_)        =>
+      "Gewichtungen müssen zwischen 0 und 100 % liegen, mindestens eine über 0"
     case DomainError.DuplicateCategoryId(c)          => s"Kategorie doppelt vorhanden: $c"
     case DomainError.UnknownCategory(by, c)          => s"Unbekannte Kategorie '$c' ($by)"
     case DomainError.LineItemTotalMismatch(exp, act) =>
