@@ -344,6 +344,6 @@ class LeistungenSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with E
         unknown shouldBe Status.BadRequest
         text should include("Unbekannte Aktion")
         badStatus shouldBe Status.BadRequest
-        missing shouldBe Status.Conflict
+        missing shouldBe Status.NotFound
     }
   }

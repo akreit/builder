@@ -367,9 +367,33 @@ object Pages:
                   )
                 )
               )
+          ),
+          tfoot(
+            tr(cls := "summen")(
+              th("Summe Zellen + nicht zugeordnet"),
+              m.totals.map(t =>
+                td(
+                  cls := (if t.mismatch then "betrag pruefen" else "betrag"),
+                  attr("data-abweichung") := t.mismatch.toString
+                )(
+                  t.sum.map(Format.money).getOrElse("nicht lesbar"),
+                  div(cls := "hinweis")(
+                    s"Netto laut Angebot: ${t.net.map(Format.money).getOrElse("nicht lesbar")}"
+                  ),
+                  if t.mismatch then div("Weicht vom Netto ab – Zuordnung prüfen") else frag()
+                )
+              )
+            )
           )
         )
       ,
+      m.columns.zip(m.dropped).collect {
+        case (col, n) if n > 0 =>
+          p(cls := "pruefen verworfen")(
+            s"${columnTitle(col)}: $n weitere Leistungsvorschläge verworfen " +
+              s"(höchstens ${LeistungPlan.MaxNew} neue je Angebot)."
+          )
+      },
       if m.columns.isEmpty then frag()
       else
         tag("details")(cls := "zuordnung")(

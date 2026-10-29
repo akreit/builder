@@ -23,6 +23,10 @@ enum RepoError:
   case ProjectNotFound(id: ProjectId)
   case CategoryNotFound(id: CategoryId)
   case OfferNotFound(id: OfferId)
+  case LeistungNotFound(id: LeistungId)
+
+  /** `item` (0-based) is not a line item of the offer. */
+  case ItemNotFound(offer: OfferId, item: Int)
   case Invalid(error: DomainError)
 
   /** A consistent request the current state does not allow (e.g. deleting a used category). */
@@ -339,7 +343,7 @@ final class SqliteProjectRepository private (
               (Some(raw.asJson.noSpaces), Some(ExtractionVersion.toString), None)
             case UploadOutcome.Failed(m) => (None, None, Some(m))
           val proposed = upload.outcome match
-            case UploadOutcome.Read(raw) => raw.neueLeistungen.getOrElse(Nil).size
+            case UploadOutcome.Read(raw) => LeistungPlan.proposals(raw).size
             case UploadOutcome.Failed(_) => 0
           freshIds("l", proposed).flatMap(ids =>
             db.transact(
@@ -445,7 +449,7 @@ final class SqliteProjectRepository private (
     def leistung(l: LeistungId): Either[RepoError, Leistung] =
       view.leistungen
         .find(_.id == l)
-        .toRight(RepoError.Rejected(s"Leistung ${l.value} gibt es nicht"))
+        .toRight(RepoError.LeistungNotFound(l))
     def upload(o: OfferId): Either[RepoError, (Upload, RawOffer)] =
       view.uploads
         .find(_.upload.id == o)
@@ -576,7 +580,7 @@ final class SqliteProjectRepository private (
           _ <- Either.cond(
             raw.lineItems.indices.contains(item),
             (),
-            RepoError.Rejected(s"Position ${item + 1} gibt es nicht")
+            RepoError.ItemNotFound(o, item)
           )
           _ <- target.traverse(l => leistung(l).flatMap(sameCategory(u, _)))
         yield List(

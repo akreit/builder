@@ -217,8 +217,12 @@ object Endpoints:
       .in(formBody[Map[String, String]])
       .out(htmlBodyUtf8)
       .errorOut(fragmentError)
+      .maxRequestBodyLength(Api.MaxEditBytes)
 
 object Api:
+  /** Edit forms carry a handful of short fields; anything larger is rejected (413). */
+  val MaxEditBytes: Long = 16L * 1024
+
   /** Reads a form of the edit endpoint. Fields: `aktion` plus, depending on it, `kategorie`,
     * `leistung`, `ziel` (target Leistung, empty for none), `angebot`, `position` (1-based),
     * `status` (a coverage code or `auto`) and `name`.
@@ -280,7 +284,8 @@ final class Api(
             _.map(v => TotalsResponse.from(Totals.compute(v.project))).left.map {
               case RepoError.Storage(code) => ApiError.StorageFailed(code)
               case RepoError.ProjectNotFound(_) | RepoError.CategoryNotFound(_) |
-                  RepoError.OfferNotFound(_) | RepoError.Invalid(_) | RepoError.Rejected(_) =>
+                  RepoError.OfferNotFound(_) | RepoError.LeistungNotFound(_) |
+                  RepoError.ItemNotFound(_, _) | RepoError.Invalid(_) | RepoError.Rejected(_) =>
                 ApiError.ProjectNotFound(raw)
             }
           )
@@ -298,7 +303,8 @@ final class Api(
             Pages.message(s"Datenbankfehler (Code $code)").render
           )
         case RepoError.ProjectNotFound(_) | RepoError.CategoryNotFound(_) |
-            RepoError.OfferNotFound(_) | RepoError.Invalid(_) | RepoError.Rejected(_) =>
+            RepoError.OfferNotFound(_) | RepoError.LeistungNotFound(_) |
+            RepoError.ItemNotFound(_, _) | RepoError.Invalid(_) | RepoError.Rejected(_) =>
           notFound("Projekt")
       })
 
@@ -340,6 +346,10 @@ final class Api(
       fragmentError(StatusCode.NotFound, s"Kategorie nicht gefunden: ${c.value}")
     case RepoError.OfferNotFound(o) =>
       fragmentError(StatusCode.NotFound, s"Angebot nicht gefunden: ${o.value}")
+    case RepoError.LeistungNotFound(l) =>
+      fragmentError(StatusCode.NotFound, s"Leistung nicht gefunden: ${l.value}")
+    case RepoError.ItemNotFound(_, item) =>
+      fragmentError(StatusCode.UnprocessableEntity, s"Position ${item + 1} gibt es nicht")
     case RepoError.Invalid(e) =>
       fragmentError(StatusCode.UnprocessableEntity, Pages.describe(e))
     case RepoError.Rejected(reason) =>

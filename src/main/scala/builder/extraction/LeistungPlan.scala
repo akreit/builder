@@ -20,6 +20,16 @@ final case class LeistungPlan(
 )
 
 object LeistungPlan:
+  /** At most this many new Leistungen are taken from one extraction; the rest are dropped. */
+  val MaxNew: Int = 10
+
+  /** The proposals that are considered, capped at [[MaxNew]]. */
+  def proposals(raw: RawOffer): List[RawNeueLeistung] =
+    raw.neueLeistungen.getOrElse(Nil).take(MaxNew)
+
+  /** How many proposals of `raw` were dropped by the cap. */
+  def dropped(raw: RawOffer): Int = (raw.neueLeistungen.getOrElse(Nil).size - MaxNew).max(0)
+
   private def norm(s: String): String = s.trim.toLowerCase
 
   /** Resolves the extractor's references against the category's `known` Leistungen. A proposed
@@ -33,7 +43,7 @@ object LeistungPlan:
       known: List[Leistung],
       freshIds: LazyList[LeistungId]
   ): LeistungPlan =
-    val proposed = raw.neueLeistungen.getOrElse(Nil)
+    val proposed = proposals(raw)
     val (added, keys, _) =
       proposed.foldLeft((List.empty[Leistung], Map.empty[String, LeistungId], freshIds)) {
         case ((acc, keys, ids), p) =>

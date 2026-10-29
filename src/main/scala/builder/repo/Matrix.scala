@@ -1,6 +1,8 @@
 package builder.repo
 
 import builder.domain.*
+import builder.extraction.Field
+import builder.extraction.LeistungPlan
 import builder.extraction.RawOffer
 
 /** Which Leistung a line item of an offer belongs to; `manual` if the user assigned it. */
@@ -36,12 +38,28 @@ final case class MatrixRow(leistung: Leistung, cells: List[Cell])
 /** A line item without a Leistung. */
 final case class Unassigned(offer: OfferId, item: Int, description: String)
 
-/** Leistungen (rows) × read offers (columns) of one category. */
+/** Check sum of one column: cell prices plus unassigned items, compared with the offer's net.
+  * `None` where a price is unreadable.
+  */
+final case class ColumnTotal(cells: Option[Money], unassigned: Option[Money], net: Option[Money]):
+  def sum: Option[Money] =
+    (cells, unassigned) match
+      case (Some(c), Some(u))                               => c.plus(u).toOption
+      case (Some(_), None) | (None, Some(_)) | (None, None) => None
+
+  /** The items do not add up to the stated net (or one side cannot be read). */
+  def mismatch: Boolean = sum.isEmpty || net.isEmpty || sum != net
+
+/** Leistungen (rows) × read offers (columns) of one category; `totals` and `dropped` (proposals cut
+  * by [[builder.extraction.LeistungPlan.MaxNew]]) are per column.
+  */
 final case class Matrix(
     category: CategoryId,
     columns: List[MatrixColumn],
     rows: List[MatrixRow],
-    unassigned: List[Unassigned]
+    unassigned: List[Unassigned],
+    totals: List[ColumnTotal],
+    dropped: List[Int]
 )
 
 object Matrix:
@@ -121,13 +139,8 @@ object Matrix:
         l,
         columns.map { col =>
           val items = itemsOf(col).collect { case (i, Some(id)) if id == l.id => i }
-          val prices = items.map(i =>
-            col.raw.lineItems
-              .lift(i)
-              .flatMap(_.total.value)
-              .flatMap(v => scala.util.Try(BigDecimal(v.replace(" ", ""))).toOption)
-              .flatMap(d => Money.fromDecimal(d, currency).toOption)
-          )
+          val prices =
+            items.map(i => col.raw.lineItems.lift(i).flatMap(li => amount(li.total, currency)))
           cell(coverage.get((col.upload.upload.id, l.id)), items, prices, currency)
         }
       )
@@ -143,4 +156,30 @@ object Matrix:
           )
       }
     )
-    Matrix(category, columns, rows, unassigned)
+    def total(prices: List[Option[Money]]): Option[Money] =
+      if prices.exists(_.isEmpty) then None else Money.sum(currency, prices.flatten).toOption
+    val totals = columns.zipWithIndex.map { (col, j) =>
+      ColumnTotal(
+        total(rows.flatMap(_.cells.lift(j)).filter(_.items.nonEmpty).map(_.price)),
+        total(
+          unassigned
+            .filter(_.offer == col.upload.upload.id)
+            .map(u => col.raw.lineItems.lift(u.item).flatMap(li => amount(li.total, currency)))
+        ),
+        amount(col.raw.net, currency)
+      )
+    }
+    Matrix(
+      category,
+      columns,
+      rows,
+      unassigned,
+      totals,
+      columns.map(c => LeistungPlan.dropped(c.raw))
+    )
+
+  /** A price field as money; `None` if absent, unparseable or too precise. */
+  def amount(f: Field, currency: Currency): Option[Money] =
+    f.text
+      .flatMap(v => scala.util.Try(BigDecimal(v.replace(" ", ""))).toOption)
+      .flatMap(d => Money.fromDecimal(d, currency).toOption)
