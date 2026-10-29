@@ -243,6 +243,13 @@ object Pages:
   def projectFragment(view: ProjectView): TypedTag[String] =
     val totals = Totals.compute(view.project)
     div(id := "projekt")(
+      if view.warnings.isEmpty then frag()
+      else
+        div(cls := "warnung", id := "datenwarnungen")(
+          strong("Gespeicherte Daten teilweise nicht verwendbar:"),
+          ul(view.warnings.map(li(_)))
+        )
+      ,
       totals.categories.map(ct => categorySection(view, ct)),
       tags2.section(cls := "summe", id := "summe")(
         h2("Gesamtsumme"),
@@ -335,8 +342,8 @@ object Pages:
     case Issue.Invalid(field, e)      => s"$field: ${describe(e)}"
 
   def describe(e: ExtractionError): String = e match
-    case ExtractionError.MissingApiKey          => "Kein ANTHROPIC_API_KEY gesetzt"
-    case ExtractionError.Transport(m)           => s"Verbindung zur Claude-API fehlgeschlagen ($m)"
-    case ExtractionError.HttpStatus(code, body) =>
-      s"Claude-API antwortete mit Status $code: ${body.take(200)}"
+    case ExtractionError.MissingApiKey   => "Kein ANTHROPIC_API_KEY gesetzt"
+    case ExtractionError.Transport(kind) => s"Verbindung zur Claude-API fehlgeschlagen ($kind)"
+    case ExtractionError.HttpStatus(code, errorType) =>
+      s"Claude-API antwortete mit Status $code${errorType.fold("")(t => s" ($t)")}"
     case ExtractionError.UnexpectedResponse(m) => s"Unerwartete Antwort der Claude-API: $m"

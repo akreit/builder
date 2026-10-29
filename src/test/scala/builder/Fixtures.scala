@@ -135,3 +135,11 @@ object RawOffers:
   final class FakeExtractor(result: Either[ExtractionError, RawOffer]) extends OfferExtractor[IO]:
     def extract(file: Array[Byte], fileType: OfferFileType): IO[Either[ExtractionError, RawOffer]] =
       IO.pure(result)
+
+  /** Like [[FakeExtractor]], and counts its calls. */
+  final class CountingExtractor(result: Either[ExtractionError, RawOffer])
+      extends OfferExtractor[IO]:
+    private val ref = cats.effect.Ref.unsafe[IO, Int](0)
+    def calls: IO[Int] = ref.get
+    def extract(file: Array[Byte], fileType: OfferFileType): IO[Either[ExtractionError, RawOffer]] =
+      ref.update(_ + 1).as(result)

@@ -1,10 +1,17 @@
 package builder.extraction
 
+import cats.effect.IO
+import cats.effect.std.Semaphore
+
 /** Kind of an uploaded offer file, recognised by its leading bytes (not by name or header). */
-enum OfferFileType(val mediaType: String, val extension: String):
-  case Pdf extends OfferFileType("application/pdf", "pdf")
-  case Jpeg extends OfferFileType("image/jpeg", "jpg")
-  case Png extends OfferFileType("image/png", "png")
+enum OfferFileType(val mediaType: String, val extension: String, val maxMegabytes: Int):
+  case Pdf extends OfferFileType("application/pdf", "pdf", 20)
+
+  /** Images above 5 MB are refused by the Claude API, so they are refused before the call. */
+  case Jpeg extends OfferFileType("image/jpeg", "jpg", 5)
+  case Png extends OfferFileType("image/png", "png", 5)
+
+  def maxBytes: Int = maxMegabytes * 1024 * 1024
 
 object OfferFileType:
   private val magic: List[(OfferFileType, List[Int])] = List(
@@ -22,12 +29,26 @@ object OfferFileType:
 
   def fromExtension(ext: String): Option[OfferFileType] = values.find(_.extension == ext)
 
+/** Why reading a file failed. Holds no response bodies: only what is safe to store and show. */
 enum ExtractionError:
   case MissingApiKey
-  case Transport(message: String)
-  case HttpStatus(code: Int, body: String)
+
+  /** Connection-level failure; `kind` is the exception class name. */
+  case Transport(kind: String)
+
+  /** Non-2xx answer with the API's `error.type`, if the body had one. */
+  case HttpStatus(code: Int, errorType: Option[String])
   case UnexpectedResponse(message: String)
 
 /** Reads the contents of an offer document. */
 trait OfferExtractor[F[_]]:
   def extract(file: Array[Byte], fileType: OfferFileType): F[Either[ExtractionError, RawOffer]]
+
+object OfferExtractor:
+  /** At most `permits` extractions run at the same time; further callers wait for a slot. */
+  def bounded(underlying: OfferExtractor[IO], permits: Int): IO[OfferExtractor[IO]] =
+    Semaphore[IO](permits.toLong).map(slots =>
+      new OfferExtractor[IO]:
+        def extract(file: Array[Byte], fileType: OfferFileType) =
+          slots.permit.surround(underlying.extract(file, fileType))
+    )

@@ -11,22 +11,17 @@ import org.scalatest.matchers.should.Matchers
 class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
 
   /** A fresh app per test, since favorites change repository state. */
-  private val app: IO[HttpApp[IO]] =
-    TestApp.allocated(RawOffers.FakeExtractor(Right(RawOffers.dachfenster))).map(_.http)
+  private def withApp[A](f: HttpApp[IO] => IO[A]): IO[A] =
+    TestApp.fresh(RawOffers.FakeExtractor(Right(RawOffers.dachfenster))).use(a => f(a.http))
 
   private def run(req: Request[IO]): IO[(Status, String, Option[String])] =
-    app
-      .flatMap(_.run(req))
-      .flatMap(r =>
-        r.bodyText.compile.string
-          .map(b =>
-            (
-              r.status,
-              b,
-              r.contentType.map(m => s"${m.mediaType.mainType}/${m.mediaType.subType}")
-            )
-          )
+    withApp(
+      _.run(req).flatMap(r =>
+        r.bodyText.compile.string.map(b =>
+          (r.status, b, r.contentType.map(m => s"${m.mediaType.mainType}/${m.mediaType.subType}"))
+        )
       )
+    )
 
   private def favorite(path: Uri, headers: Header.ToRaw*): Request[IO] =
     Request[IO](Method.POST, path).putHeaders(headers*)
@@ -34,9 +29,7 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
   private val hx: Header.ToRaw = "HX-Request" -> "true"
 
   private def runWithHeaders(req: Request[IO]): IO[(Status, String, Headers)] =
-    app
-      .flatMap(_.run(req))
-      .flatMap(r => r.bodyText.compile.string.map(b => (r.status, b, r.headers)))
+    withApp(_.run(req).flatMap(r => r.bodyText.compile.string.map(b => (r.status, b, r.headers))))
 
   private def retargeted(h: Headers) =
     (
@@ -100,39 +93,41 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
 
   "POST favorite updates the favorite and re-renders the totals with the new sum" in {
     val post = favorite(uri"/ui/projects/demo/categories/daemmung/favorite/daemmung-b", hx)
-    for
-      a <- app
-      r <- a.run(post)
-      fragment <- r.bodyText.compile.string
-      after <- a
-        .run(Request[IO](Method.GET, uri"/projects/demo/totals"))
-        .flatMap(_.bodyText.compile.string)
-    yield
-      r.status shouldBe Status.Ok
-      fragment should include("id=\"projekt\"")
-      fragment should not include "<html"
-      // 21.118,50 € + Holzbau Fiktiv KG 120 m² × 89,90 € = 10.788,00 €
-      fragment should include("31.906,50 €")
-      fragment should not include "Entscheidung offen"
-      parse(after).flatMap(_.hcursor.downField("net").as[String]) shouldBe Right("31906.50")
+    withApp { a =>
+      for
+        r <- a.run(post)
+        fragment <- r.bodyText.compile.string
+        after <- a
+          .run(Request[IO](Method.GET, uri"/projects/demo/totals"))
+          .flatMap(_.bodyText.compile.string)
+      yield
+        r.status shouldBe Status.Ok
+        fragment should include("id=\"projekt\"")
+        fragment should not include "<html"
+        // 21.118,50 € + Holzbau Fiktiv KG 120 m² × 89,90 € = 10.788,00 €
+        fragment should include("31.906,50 €")
+        fragment should not include "Entscheidung offen"
+        parse(after).flatMap(_.hcursor.downField("net").as[String]) shouldBe Right("31906.50")
+    }
   }
 
   "POST favorite with an offer of another category is rejected with 422 and changes nothing" in {
     val post = favorite(uri"/ui/projects/demo/categories/dachfenster/favorite/gauben-b", hx)
-    for
-      a <- app
-      r <- a.run(post)
-      body <- r.bodyText.compile.string
-      after <- a
-        .run(Request[IO](Method.GET, uri"/projects/demo/totals"))
-        .flatMap(_.bodyText.compile.string)
-    yield
-      r.status shouldBe Status.UnprocessableContent
-      retargeted(r.headers) shouldBe (Some("#fehler"), Some("innerHTML"))
-      body should include("gehört nicht zur Kategorie")
-      body should include("class=\"fehlermeldung\"")
-      body should not include "id=\"fehler\""
-      parse(after).flatMap(_.hcursor.downField("net").as[String]) shouldBe Right("21118.50")
+    withApp { a =>
+      for
+        r <- a.run(post)
+        body <- r.bodyText.compile.string
+        after <- a
+          .run(Request[IO](Method.GET, uri"/projects/demo/totals"))
+          .flatMap(_.bodyText.compile.string)
+      yield
+        r.status shouldBe Status.UnprocessableContent
+        retargeted(r.headers) shouldBe (Some("#fehler"), Some("innerHTML"))
+        body should include("gehört nicht zur Kategorie")
+        body should include("class=\"fehlermeldung\"")
+        body should not include "id=\"fehler\""
+        parse(after).flatMap(_.hcursor.downField("net").as[String]) shouldBe Right("21118.50")
+    }
   }
 
   "POST favorite for an unknown project is 404" in {

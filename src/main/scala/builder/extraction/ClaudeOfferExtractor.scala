@@ -2,6 +2,7 @@ package builder.extraction
 
 import cats.effect.IO
 import cats.effect.Resource
+import cats.effect.std.Random
 import io.circe.Json
 import io.circe.parser.parse
 import io.circe.syntax.*
@@ -31,8 +32,36 @@ object ApiKey:
   * `image` block, and structured outputs (`output_config.format`) make the answer JSON matching
   * [[RawOffer]].
   */
-final class ClaudeOfferExtractor(client: Client[IO], key: Option[ApiKey], model: String)
-    extends OfferExtractor[IO]:
+/** Retries of rate limits (429), server errors (5xx, incl. 529 overloaded) and connection errors:
+  * the n-th retry waits about `base * 2^n` (equal jitter, at most `maxDelay`), or longer if the API
+  * asks for it via `retry-after`.
+  */
+final case class RetryPolicy(maxRetries: Int, base: FiniteDuration, maxDelay: FiniteDuration):
+  def delay(
+      retry: Int,
+      retryAfter: Option[FiniteDuration],
+      random: Random[IO]
+  ): IO[FiniteDuration] =
+    val backoff = (base * (1L << retry.min(20))).min(maxDelay)
+    val half = backoff.toMillis / 2
+    random
+      .betweenLong(0L, half + 1)
+      .map(j => (half + j).millis.max(retryAfter.fold(Duration.Zero)(_.min(maxDelay))))
+
+object RetryPolicy:
+  val default: RetryPolicy = RetryPolicy(maxRetries = 3, base = 2.seconds, maxDelay = 60.seconds)
+
+/** Outcome of one HTTP attempt. */
+private enum Attempt:
+  case Done(result: Either[ExtractionError, RawOffer])
+  case Retry(error: ExtractionError, retryAfter: Option[FiniteDuration])
+
+final class ClaudeOfferExtractor(
+    client: Client[IO],
+    key: Option[ApiKey],
+    model: String,
+    retry: RetryPolicy = RetryPolicy.default
+) extends OfferExtractor[IO]:
   import ClaudeOfferExtractor.*
 
   def extract(file: Array[Byte], fileType: OfferFileType): IO[Either[ExtractionError, RawOffer]] =
@@ -48,24 +77,58 @@ final class ClaudeOfferExtractor(client: Client[IO], key: Option[ApiKey], model:
             )
           )
           .withEntity(requestBody(model, file, fileType).noSpaces)
-        client
-          .run(req)
-          .use(resp =>
-            resp.bodyText.compile.string.map(body =>
-              if resp.status.isSuccess then parseResponse(body)
-              else Left(ExtractionError.HttpStatus(resp.status.code, body.take(500)))
-            )
-          )
-          .attempt
-          .map(
-            _.left
-              .map(e => ExtractionError.Transport(s"${e.getClass.getSimpleName}: ${e.getMessage}"))
-              .flatten
-          )
+        Random.scalaUtilRandom[IO].flatMap(random => withRetries(req, random, 0))
+
+  private def withRetries(
+      req: Request[IO],
+      random: Random[IO],
+      retries: Int
+  ): IO[Either[ExtractionError, RawOffer]] =
+    once(req).flatMap {
+      case Attempt.Done(result)                                   => IO.pure(result)
+      case Attempt.Retry(error, _) if retries >= retry.maxRetries => IO.pure(Left(error))
+      case Attempt.Retry(_, after)                                =>
+        retry.delay(retries, after, random).flatMap(IO.sleep) >> withRetries(
+          req,
+          random,
+          retries + 1
+        )
+    }
+
+  private def once(req: Request[IO]): IO[Attempt] =
+    client
+      .run(req)
+      .use(resp =>
+        resp.bodyText.compile.string.map(body =>
+          if resp.status.isSuccess then Attempt.Done(parseResponse(body))
+          else
+            val error = ExtractionError.HttpStatus(resp.status.code, errorType(body))
+            if isRetryable(resp.status.code) then Attempt.Retry(error, retryAfter(resp.headers))
+            else Attempt.Done(Left(error))
+        )
+      )
+      .attempt
+      .map {
+        case Right(attempt) => attempt
+        case Left(e) => Attempt.Retry(ExtractionError.Transport(e.getClass.getSimpleName), None)
+      }
 
 object ClaudeOfferExtractor:
   val DefaultModel = "claude-sonnet-5-5"
   private val endpoint: Uri = uri"https://api.anthropic.com/v1/messages"
+
+  private def isRetryable(code: Int): Boolean = code == 429 || (code >= 500 && code <= 599)
+
+  private def retryAfter(headers: Headers): Option[FiniteDuration] =
+    headers
+      .get(CIString("retry-after"))
+      .flatMap(_.head.value.trim.toLongOption)
+      .filter(_ >= 0)
+      .map(_.seconds)
+
+  /** `error.type` of an API error body (e.g. `overloaded_error`); the message is not kept. */
+  private def errorType(body: String): Option[String] =
+    parse(body).toOption.flatMap(_.hcursor.downField("error").downField("type").as[String].toOption)
 
   /** Ember client with timeouts long enough for reading a multi-page PDF. */
   def resource(key: Option[ApiKey], model: String): Resource[IO, ClaudeOfferExtractor] =

@@ -29,6 +29,7 @@ lazy val root = (project in file("."))
       "com.lihaoyi" %% "scalatags" % scalatagsV,
       "io.circe" %% "circe-parser" % circeV,
       "org.scalatest" %% "scalatest" % scalatestV % Test,
+      "org.typelevel" %% "cats-effect-testkit" % catsEffectV % Test,
       "org.typelevel" %% "cats-effect-testing-scalatest" % "1.8.0" % Test,
       "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test
     ),

@@ -2,6 +2,7 @@ package builder
 
 import builder.extraction.ApiKey
 import builder.extraction.ClaudeOfferExtractor
+import builder.extraction.OfferExtractor
 import builder.http.Api
 import builder.repo.SqliteProjectRepository
 import builder.storage.FileStore
@@ -36,7 +37,8 @@ object Main extends IOApp.Simple:
         )
       )
       repo <- SqliteProjectRepository.resource(dataDir.resolve("builder.db"), List(project))
-      extractor <- ClaudeOfferExtractor.resource(ApiKey.fromEnv, model)
+      claude <- ClaudeOfferExtractor.resource(ApiKey.fromEnv, model)
+      extractor <- cats.effect.Resource.eval(OfferExtractor.bounded(claude, permits = 2))
       server <- EmberServerBuilder
         .default[IO]
         .withHost(host)
