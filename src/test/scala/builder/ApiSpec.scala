@@ -1,6 +1,4 @@
 package builder
-import builder.http.Api
-import builder.repo.InMemoryProjectRepository
 import cats.effect.IO
 import cats.effect.testing.scalatest.AsyncIOSpec
 import io.circe.Json
@@ -11,13 +9,10 @@ import org.scalatest.freespec.AsyncFreeSpec
 import org.scalatest.matchers.should.Matchers
 
 class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
-  import Fixtures.*
-
-  private val sample = SampleData.project.value
 
   /** A fresh app per test, since favorites change repository state. */
   private val app: IO[HttpApp[IO]] =
-    InMemoryProjectRepository.of(List(sample)).map(repo => Api(repo, sample.id).routes.orNotFound)
+    TestApp.allocated(RawOffers.FakeExtractor(Right(RawOffers.dachfenster))).map(_.http)
 
   private def run(req: Request[IO]): IO[(Status, String, Option[String])] =
     app

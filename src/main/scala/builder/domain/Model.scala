@@ -203,6 +203,10 @@ final case class Project private (
     offers: List[Offer],
     favorites: Map[CategoryId, OfferId]
 ):
+  /** Adds `offer`, re-validating the project (unique id, known category, project currency). */
+  def withOffer(offer: Offer): Either[DomainError, Project] =
+    Project.from(id, name, currency, categories, workPackages, offers :+ offer, favorites)
+
   /** Marks `offer` as the favorite of `category`, re-validating the project. */
   def withFavorite(category: CategoryId, offer: OfferId): Either[DomainError, Project] =
     Project.from(

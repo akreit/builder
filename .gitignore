@@ -20,3 +20,4 @@ metals.sbt
 .env
 *-key.json
 service-account*.json
+/data/
