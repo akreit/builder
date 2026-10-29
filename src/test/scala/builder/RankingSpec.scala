@@ -61,6 +61,8 @@ class RankingSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with Eith
     cat,
     List(colA, colB),
     List(MatrixRow(fenster, List(has(1000), has(1200))), MatrixRow(einbau, List(has(500), lacks))),
+    Nil,
+    Nil,
     Nil
   )
 
