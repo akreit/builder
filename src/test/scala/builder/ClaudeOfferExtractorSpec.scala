@@ -18,6 +18,8 @@ import org.scalatest.matchers.should.Matchers
 import org.typelevel.ci.CIString
 
 import java.io.IOException
+import java.net.ConnectException
+import java.util.concurrent.TimeoutException
 import scala.concurrent.duration.*
 
 class ClaudeOfferExtractorSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
@@ -175,10 +177,34 @@ class ClaudeOfferExtractorSpec extends AsyncFreeSpec with AsyncIOSpec with Match
   }
 
   "connection errors are retried, then reported as a transport error without details" in {
-    run(List(IO.raiseError(IOException("connection reset by 10.0.0.1")))).asserting {
+    run(List(IO.raiseError(ConnectException("connection refused by 10.0.0.1")))).asserting {
+      (result, calls, _) =>
+        result shouldBe Left(ExtractionError.Transport("ConnectException"))
+        calls shouldBe 4
+    }
+  }
+
+  "a client timeout is not retried: Claude may still be working and billing" in {
+    run(List(IO.raiseError(TimeoutException("4 minutes")), IO.pure(success))).asserting {
+      (result, calls, _) =>
+        result shouldBe Left(ExtractionError.Transport("TimeoutException"))
+        calls shouldBe 1
+    }
+  }
+
+  "other failures (e.g. a reset mid-response) are not retried either" in {
+    run(List(IO.raiseError(IOException("reset")), IO.pure(success))).asserting {
       (result, calls, _) =>
         result shouldBe Left(ExtractionError.Transport("IOException"))
-        calls shouldBe 4
+        calls shouldBe 1
+    }
+  }
+
+  "all attempts together are cut off after 6 minutes" in {
+    run(List(IO.never)).asserting { (result, calls, elapsed) =>
+      result shouldBe Left(ExtractionError.TimedOut)
+      calls shouldBe 1
+      elapsed shouldBe 6.minutes
     }
   }
 

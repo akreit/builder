@@ -346,4 +346,5 @@ object Pages:
     case ExtractionError.Transport(kind) => s"Verbindung zur Claude-API fehlgeschlagen ($kind)"
     case ExtractionError.HttpStatus(code, errorType) =>
       s"Claude-API antwortete mit Status $code${errorType.fold("")(t => s" ($t)")}"
+    case ExtractionError.TimedOut              => "Claude-API hat nicht rechtzeitig geantwortet"
     case ExtractionError.UnexpectedResponse(m) => s"Unerwartete Antwort der Claude-API: $m"

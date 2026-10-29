@@ -69,8 +69,10 @@ trait ProjectRepository:
       offer: OfferId
   ): IO[Either[RepoError, ProjectView]]
 
-  /** Stores an uploaded offer of `id`; it is validated (and counted if valid) on every read. */
-  def addUpload(id: ProjectId, upload: Upload): IO[Either[RepoError, ProjectView]]
+  /** Stores an uploaded offer of `id`; it is validated (and counted if valid) on every read.
+    * `Right` means the row is committed.
+    */
+  def addUpload(id: ProjectId, upload: Upload): IO[Either[RepoError, Unit]]
 
 /** One `uploads` row as stored; decoded into an [[Upload]] by [[SqliteProjectRepository]]. */
 private final case class UploadRow(
@@ -207,7 +209,7 @@ final class SqliteProjectRepository private (
       }
     )
 
-  def addUpload(id: ProjectId, upload: Upload): IO[Either[RepoError, ProjectView]] =
+  def addUpload(id: ProjectId, upload: Upload): IO[Either[RepoError, Unit]] =
     lock.lock.surround(
       seeds.lift(id) match
         case None => IO.pure(Left(RepoError.ProjectNotFound(id)))
@@ -236,7 +238,7 @@ final class SqliteProjectRepository private (
                 failure
               )
             )
-          ).flatMap(_.fold(e => IO.pure(Left(e)), _ => load(id)))
+          )
     )
 
 object SqliteProjectRepository:
@@ -290,6 +292,21 @@ object SqliteProjectRepository:
     List(
       "ALTER TABLE uploads ADD COLUMN extraction_version INTEGER",
       "UPDATE uploads SET extraction_version = 1 WHERE extraction IS NOT NULL"
+    ),
+    // Offer ids are unique per project only: key (project_id, id), favorites reference both.
+    List(
+      """CREATE TABLE offers_new(project_id TEXT NOT NULL, id TEXT NOT NULL,
+        |  PRIMARY KEY (project_id, id))""".stripMargin,
+      "INSERT INTO offers_new(project_id, id) SELECT project_id, id FROM offers",
+      """CREATE TABLE favorites_new(
+        |  project_id TEXT NOT NULL, category_id TEXT NOT NULL, offer_id TEXT NOT NULL,
+        |  PRIMARY KEY (project_id, category_id),
+        |  FOREIGN KEY (project_id, offer_id) REFERENCES offers(project_id, id) ON DELETE CASCADE)""".stripMargin,
+      "INSERT INTO favorites_new SELECT project_id, category_id, offer_id FROM favorites",
+      "DROP TABLE favorites",
+      "DROP TABLE offers",
+      "ALTER TABLE offers_new RENAME TO offers",
+      "ALTER TABLE favorites_new RENAME TO favorites"
     )
   )
 

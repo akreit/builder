@@ -36,7 +36,12 @@ object ApiKey:
   * the n-th retry waits about `base * 2^n` (equal jitter, at most `maxDelay`), or longer if the API
   * asks for it via `retry-after`.
   */
-final case class RetryPolicy(maxRetries: Int, base: FiniteDuration, maxDelay: FiniteDuration):
+final case class RetryPolicy(
+    maxRetries: Int,
+    base: FiniteDuration,
+    maxDelay: FiniteDuration,
+    overallTimeout: FiniteDuration
+):
   def delay(
       retry: Int,
       retryAfter: Option[FiniteDuration],
@@ -49,7 +54,12 @@ final case class RetryPolicy(maxRetries: Int, base: FiniteDuration, maxDelay: Fi
       .map(j => (half + j).millis.max(retryAfter.fold(Duration.Zero)(_.min(maxDelay))))
 
 object RetryPolicy:
-  val default: RetryPolicy = RetryPolicy(maxRetries = 3, base = 2.seconds, maxDelay = 60.seconds)
+  val default: RetryPolicy = RetryPolicy(
+    maxRetries = 3,
+    base = 2.seconds,
+    maxDelay = 60.seconds,
+    overallTimeout = 6.minutes
+  )
 
 /** Outcome of one HTTP attempt. */
 private enum Attempt:
@@ -77,7 +87,10 @@ final class ClaudeOfferExtractor(
             )
           )
           .withEntity(requestBody(model, file, fileType).noSpaces)
-        Random.scalaUtilRandom[IO].flatMap(random => withRetries(req, random, 0))
+        Random
+          .scalaUtilRandom[IO]
+          .flatMap(random => withRetries(req, random, 0))
+          .timeoutTo(retry.overallTimeout, IO.pure(Left(ExtractionError.TimedOut)))
 
   private def withRetries(
       req: Request[IO],
@@ -110,12 +123,24 @@ final class ClaudeOfferExtractor(
       .attempt
       .map {
         case Right(attempt) => attempt
-        case Left(e) => Attempt.Retry(ExtractionError.Transport(e.getClass.getSimpleName), None)
+        case Left(e)        =>
+          val error = ExtractionError.Transport(e.getClass.getSimpleName)
+          // A timeout may mean Claude is still working (and billing): never sent twice.
+          if isConnectionError(e) then Attempt.Retry(error, None) else Attempt.Done(Left(error))
       }
 
 object ClaudeOfferExtractor:
   val DefaultModel = "claude-sonnet-5-5"
   private val endpoint: Uri = uri"https://api.anthropic.com/v1/messages"
+
+  /** Failures before the request reached Claude (or the connection broke): safe to send again. */
+  private val connectionErrors: List[Class[? <: Throwable]] = List(
+    classOf[java.net.ConnectException],
+    classOf[java.nio.channels.ClosedChannelException],
+    classOf[org.http4s.ember.core.EmberException]
+  )
+
+  private def isConnectionError(e: Throwable): Boolean = connectionErrors.exists(_.isInstance(e))
 
   private def isRetryable(code: Int): Boolean = code == 429 || (code >= 500 && code <= 599)
 

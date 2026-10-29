@@ -14,11 +14,14 @@ import io.circe.Codec
 import org.http4s.HttpRoutes
 import sttp.model.Part
 import sttp.model.StatusCode
+import sttp.monad.MonadError
 import sttp.tapir.*
 import sttp.tapir.files.*
 import sttp.tapir.json.circe.*
 import sttp.tapir.server.http4s.Http4sServerInterpreter
 import sttp.tapir.server.http4s.Http4sServerOptions
+import sttp.tapir.server.interceptor.DecodeFailureContext
+import sttp.tapir.server.interceptor.decodefailure.DecodeFailureHandler
 import sttp.tapir.server.interceptor.decodefailure.DefaultDecodeFailureHandler
 import sttp.tapir.server.model.EndpointExtensions.*
 import sttp.tapir.server.model.ValuedEndpointOutput
@@ -152,6 +155,9 @@ object Endpoints:
   private val htmlError: EndpointOutput[HtmlError] =
     statusCode.and(htmlBodyUtf8).mapTo[HtmlError]
 
+  /** Endpoints whose decode failures are rendered as htmx error fragments. */
+  val htmxNames: Set[String] = Set("upload-offer", "mark-favorite")
+
   /** Projektübersicht of the home project. */
   val overviewPage =
     endpoint.get.in("").out(htmlBodyUtf8).errorOut(htmlError)
@@ -173,6 +179,7 @@ object Endpoints:
   /** htmx: marks an offer as favorite and returns the re-rendered overview fragment. */
   val markFavorite =
     endpoint.post
+      .name("mark-favorite")
       .in(
         "ui" / "projects" / path[String]("projectId") / "categories" / path[String](
           "categoryId"
@@ -187,6 +194,7 @@ object Endpoints:
     */
   val uploadOffer =
     endpoint.post
+      .name("upload-offer")
       .in(
         "ui" / "projects" / path[String]("projectId") / "categories" / path[String](
           "categoryId"
@@ -329,35 +337,67 @@ final class Api(
                 IO.pure(Left(fragmentError(StatusCode.InternalServerError, Pages.describe(e))))
               case Right(id) =>
                 val name = fileName.getOrElse(s"angebot.${fileType.extension}")
-                val store = for
-                  _ <- files.save(id, fileType, bytes)
-                  extracted <- extractor.extract(bytes, fileType)
-                  now <- Clock[IO].realTimeInstant
-                  outcome = extracted.fold(
-                    e => UploadOutcome.Failed(Pages.describe(e)),
-                    UploadOutcome.Read(_)
-                  )
-                  stored <- repo.addUpload(p, Upload(id, c, name, fileType, now, outcome))
-                yield stored
-                // The file is kept only if its upload row was stored.
-                store
-                  .guaranteeCase {
-                    case Outcome.Succeeded(result) =>
-                      result.flatMap(_.fold(_ => files.delete(id, fileType), _ => IO.unit))
-                    case Outcome.Errored(_) | Outcome.Canceled() => files.delete(id, fileType)
-                  }
-                  .map(_.map(Pages.projectFragment(_).render).left.map(repoError))
+                val upload = files.save(id, fileType, bytes) >>
+                  extractor
+                    .extract(bytes, fileType)
+                    .flatMap(extracted =>
+                      Clock[IO].realTimeInstant.map(now =>
+                        Upload(
+                          id,
+                          c,
+                          name,
+                          fileType,
+                          now,
+                          extracted.fold(
+                            e => UploadOutcome.Failed(Pages.describe(e)),
+                            UploadOutcome.Read(_)
+                          )
+                        )
+                      )
+                    )
+                // Saving and reading may be cancelled (then the file goes); once read, the row
+                // is written without interruption and the file is deleted only if that failed.
+                IO.uncancelable(poll =>
+                  poll(upload)
+                    .guaranteeCase {
+                      case Outcome.Succeeded(_)                    => IO.unit
+                      case Outcome.Errored(_) | Outcome.Canceled() => files.delete(id, fileType)
+                    }
+                    .flatMap(u =>
+                      repo
+                        .addUpload(p, u)
+                        .onError(_ => files.delete(id, fileType))
+                        .flatTap(_.fold(_ => files.delete(id, fileType), _ => IO.unit))
+                    )
+                ).flatMap {
+                  case Left(e)   => IO.pure(Left(repoError(e)))
+                  case Right(()) =>
+                    repo.find(p).map(_.map(Pages.projectFragment(_).render).left.map(repoError))
+                }
             }
         }
 
-  /** Decode failures (e.g. a body over the limit: 413) as German error fragments for `#fehler`. */
-  private val decodeFailureHandler: DefaultDecodeFailureHandler[IO] =
-    DefaultDecodeFailureHandler[IO].copy[IO](response = (status, _, _) =>
+  private val defaultDecodeFailures: DefaultDecodeFailureHandler[IO] =
+    DefaultDecodeFailureHandler[IO]
+
+  /** Decode failures of the htmx endpoints (e.g. a body over the limit: 413) as German error
+    * fragments for `#fehler`.
+    */
+  private val htmxDecodeFailures: DefaultDecodeFailureHandler[IO] =
+    defaultDecodeFailures.copy[IO](response = (status, _, _) =>
       val text = status match
         case StatusCode.PayloadTooLarge =>
           s"Datei zu groß (höchstens ${OfferFileType.Pdf.maxMegabytes} MB)"
         case other => s"Ungültige Anfrage (Status ${other.code})"
       ValuedEndpointOutput(Endpoints.fragmentError, fragmentError(status, text)))
+
+  /** htmx endpoints get fragments, all others tapir's default responses. */
+  private val decodeFailureHandler: DecodeFailureHandler[IO] = new DecodeFailureHandler[IO]:
+    def apply(ctx: DecodeFailureContext)(implicit
+        monad: MonadError[IO]
+    ): IO[Option[ValuedEndpointOutput[?]]] =
+      if ctx.endpoint.info.name.exists(Endpoints.htmxNames.contains) then htmxDecodeFailures(ctx)
+      else defaultDecodeFailures(ctx)
 
   val routes: HttpRoutes[IO] = Http4sServerInterpreter[IO](
     Http4sServerOptions.customiseInterceptors[IO].decodeFailureHandler(decodeFailureHandler).options

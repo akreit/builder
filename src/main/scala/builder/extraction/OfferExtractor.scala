@@ -40,6 +40,9 @@ enum ExtractionError:
   case HttpStatus(code: Int, errorType: Option[String])
   case UnexpectedResponse(message: String)
 
+  /** No answer within the overall time limit (all attempts together). */
+  case TimedOut
+
 /** Reads the contents of an offer document. */
 trait OfferExtractor[F[_]]:
   def extract(file: Array[Byte], fileType: OfferFileType): F[Either[ExtractionError, RawOffer]]
