@@ -263,13 +263,20 @@ object Api:
       case "bewertung" =>
         val key = field("firma").flatMap(ContractorKey.of(_).toRight("Feld 'firma' fehlt"))
         val note = form.get("notiz").map(_.trim).getOrElse("")
-        val rating = form.get("sterne").map(_.trim).filter(_.nonEmpty) match
-          case None    => Right(None)
-          case Some(n) =>
-            n.toIntOption
-              .toRight(s"Ungültige Sternezahl: $n")
-              .flatMap(i => domain(Stars.from(i)))
-              .map(st => Some(Rating(st, note)))
+        val noteOk = Either.cond(
+          note.length <= Rating.MaxNote,
+          (),
+          s"Notiz zu lang (höchstens ${Rating.MaxNote} Zeichen)"
+        )
+        val rating = noteOk.flatMap(_ =>
+          form.get("sterne").map(_.trim).filter(_.nonEmpty) match
+            case None    => Right(None)
+            case Some(n) =>
+              n.toIntOption
+                .toRight(s"Ungültige Sternezahl: $n")
+                .flatMap(i => domain(Stars.from(i)))
+                .map(st => Some(Rating(st, note)))
+        )
         (key, rating).mapN(Edit.RateContractor(_, _))
       case "gewichtung" =>
         Criterion.values.toList

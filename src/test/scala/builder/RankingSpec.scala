@@ -25,8 +25,16 @@ class RankingSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with Eith
   private val fenster = leistung("fenster")
   private val einbau = leistung("einbau")
 
-  private def column(id: String, name: String): MatrixColumn =
+  private def column(id: String, name: String, accepted: Boolean = true): MatrixColumn =
     val raw = dachfenster.copy(contractor = f(name))
+    val status =
+      if accepted then
+        UploadStatus.Accepted(raw, Fixtures.offer(id, Fixtures.category("dachfenster", "D"), 100))
+      else
+        UploadStatus.Rejected(
+          raw,
+          cats.data.NonEmptyList.one(builder.extraction.Issue.Missing("Netto"))
+        )
     MatrixColumn(
       UploadView(
         Upload(
@@ -37,7 +45,7 @@ class RankingSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with Eith
           Instant.EPOCH,
           UploadOutcome.Read(raw)
         ),
-        UploadStatus.ExtractionFailed("egal")
+        status
       ),
       raw
     )
@@ -118,7 +126,57 @@ class RankingSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with Eith
       List(CriterionResult.NotAvailable("keine Leistung, die alle Angebote mit Preis enthalten"))
   }
 
-  "weights must be 0 to 100 for every criterion with at least one above 0; stars 1 to 5" in {
+  "a rejected offer neither changes the common Leistungen nor ever gets a rank" in {
+    // C lacks Fenster, which would empty `common` if C counted; it is rejected, so it does not.
+    val colC = column("c", "Firma C", accepted = false)
+    val withRejected = matrix.copy(
+      columns = List(colA, colC, colB),
+      rows = List(
+        MatrixRow(fenster, List(has(1000), lacks, has(1200))),
+        MatrixRow(einbau, List(has(500), has(1), lacks))
+      )
+    )
+    val ratings =
+      Map(key("Firma A") -> rating(3), key("Firma B") -> rating(3), key("Firma C") -> rating(5))
+    val r = Ranking.build(withRejected, ratings, Weights.default, Currency.EUR)
+    val plain = Ranking.build(matrix, ratings, Weights.default, Currency.EUR)
+    r.common shouldBe List(fenster)
+    r.ranked.map(e => e.contractor -> e.total) shouldBe plain.ranked.map(e =>
+      e.contractor -> e.total
+    )
+    r.unranked.map(e => (e.contractor, e.comparable, e.total)) shouldBe List(
+      ("Firma C", false, None)
+    )
+    r.unranked.flatMap(_.criteria.map(_.result)).distinct shouldBe
+      List(CriterionResult.NotAvailable(Ranking.NotComparable))
+  }
+
+  "a comparison price of 0 or less gets no price points and does not become the cheapest" in {
+    val zero = matrix.copy(
+      rows =
+        List(MatrixRow(fenster, List(has(0), has(1200))), MatrixRow(einbau, List(has(500), lacks)))
+    )
+    val r = Ranking.build(zero, Map.empty, weights(100, 0), Currency.EUR)
+    r.ranked.map(e => e.contractor -> e.total) shouldBe List("Firma B" -> Some(BigDecimal("100.0")))
+    r.unranked.flatMap(price) shouldBe List(CriterionResult.NotAvailable("Vergleichspreis ≤ 0"))
+  }
+
+  "an offer without a recognised contractor is never rated by its file name" in {
+    val anonym = colA.copy(raw = colA.raw.copy(contractor = absent))
+    val r = Ranking.build(
+      matrix.copy(columns = List(anonym, colB)),
+      Map(key("a.pdf") -> rating(5)),
+      Weights.default,
+      Currency.EUR
+    )
+    val e = r.unranked.find(_.contractor == "a.pdf")
+    e.map(_.firm) shouldBe Some(None)
+    e.flatMap(refs) shouldBe Some(CriterionResult.NotAvailable("Firma nicht erkannt"))
+  }
+
+  "weights must be 0 to 100 each and sum to 100; stars 1 to 5" in {
+    Weights.from(Map(Criterion.Preis -> 60, Criterion.Referenzen -> 30)).isLeft shouldBe true
+    Weights.from(Map(Criterion.Preis -> 60, Criterion.Referenzen -> 40)).isRight shouldBe true
     Weights.from(Map(Criterion.Preis -> 0, Criterion.Referenzen -> 0)).isLeft shouldBe true
     Weights.from(Map(Criterion.Preis -> 101, Criterion.Referenzen -> 0)).isLeft shouldBe true
     Weights.from(Map(Criterion.Preis -> 100)).isLeft shouldBe true
@@ -198,10 +256,26 @@ class RankingSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with Eith
         (badStars, _) <- TestApp
           .resource(dir, extractor)
           .use(app => edit(app, "aktion" -> "bewertung", "firma" -> "X", "sterne" -> "6"))
-        (badWeights, _) <- TestApp
+        (badWeights, weightsText) <- TestApp
           .resource(dir, extractor)
           .use(app =>
-            edit(app, "aktion" -> "gewichtung", "gewicht-preis" -> "0", "gewicht-referenzen" -> "0")
+            edit(
+              app,
+              "aktion" -> "gewichtung",
+              "gewicht-preis" -> "60",
+              "gewicht-referenzen" -> "30"
+            )
+          )
+        (longNote, noteText) <- TestApp
+          .resource(dir, extractor)
+          .use(app =>
+            edit(
+              app,
+              "aktion" -> "bewertung",
+              "firma" -> "X",
+              "sterne" -> "3",
+              "notiz" -> ("n" * 501)
+            )
           )
       yield
         ranking(unrated).map(_._3) shouldBe List("nicht bewertbar", "nicht bewertbar")
@@ -217,5 +291,8 @@ class RankingSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with Eith
         afterRating should include("Referenzen (30 %)")
         badStars shouldBe Status.BadRequest
         badWeights shouldBe Status.BadRequest
+        weightsText should include("zusammen 100 %")
+        longNote shouldBe Status.BadRequest
+        noteText should include("Notiz zu lang")
     }
   }

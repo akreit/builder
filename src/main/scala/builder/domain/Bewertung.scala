@@ -17,6 +17,10 @@ object ContractorKey:
 /** What the user knows about a contractor's references. */
 final case class Rating(stars: Stars, note: String)
 
+object Rating:
+  /** Longest note kept with a rating. */
+  val MaxNote: Int = 500
+
 /** A criterion offers are ranked by. More (e.g. Termin, Gewährleistung) can be added as cases. */
 enum Criterion:
   case Preis
@@ -38,10 +42,12 @@ opaque type Weights = Map[Criterion, Int]
 object Weights:
   val default: Weights = Map(Criterion.Preis -> 50, Criterion.Referenzen -> 50)
 
-  /** Every criterion needs a weight from 0 to 100, and at least one must be above 0. */
+  /** Every criterion needs a weight from 0 to 100, and together they make exactly 100. */
   def from(ws: Map[Criterion, Int]): Either[DomainError, Weights] =
     Either.cond(
-      Criterion.values.forall(c => ws.get(c).exists(w => w >= 0 && w <= 100)) && ws.values.sum > 0,
+      Criterion.values.forall(c =>
+        ws.get(c).exists(w => w >= 0 && w <= 100)
+      ) && Criterion.values.toList.map(c => ws.getOrElse(c, 0)).sum == 100,
       ws.filter((c, _) => Criterion.values.contains(c)),
       DomainError.InvalidWeights(ws.map((c, w) => Criterion.code(c) -> w))
     )

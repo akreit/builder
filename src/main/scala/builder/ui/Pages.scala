@@ -497,6 +497,9 @@ object Pages:
       td(cls := "betrag pruefen")(strong(reason))
 
   private def ratingForm(project: Project, e: RankedOffer): Frag =
+    e.firm.fold[Frag](span(cls := "hinweis")("Firma nicht erkannt"))(_ => ratingFields(project, e))
+
+  private def ratingFields(project: Project, e: RankedOffer): Frag =
     editForm(project, List("aktion" -> "bewertung", "firma" -> e.contractor), auto = false)(
       select(name := "sterne", attr("aria-label") := s"Sterne für ${e.contractor}")(
         option(value := "", if e.rating.isEmpty then selected := "selected" else frag())(
@@ -515,6 +518,7 @@ object Pages:
         name := "notiz",
         value := e.rating.fold("")(_.note),
         placeholder := "Notiz zu Referenzen",
+        attr("maxlength") := Rating.MaxNote.toString,
         attr("aria-label") := s"Notiz zu ${e.contractor}"
       ),
       button(tpe := "submit")("Speichern")
@@ -530,6 +534,7 @@ object Pages:
             s"Vergleichspreis ${Format.money(m)}"
           )
         ),
+        if e.comparable then frag() else div(cls := "pruefen")(Ranking.NotComparable),
         if e.price.missing.isEmpty then frag()
         else
           div(cls := "pruefen")(
@@ -582,7 +587,10 @@ object Pages:
           )
         ),
         if r.unranked.isEmpty then frag()
-        else p(cls := "hinweis")("Ohne Rang: nicht alle gewichteten Kriterien sind bewertet.")
+        else
+          p(cls := "hinweis")(
+            "Ohne Rang: nicht alle gewichteten Kriterien sind bewertet oder das Angebot hat Abweichungen."
+          )
       )
 
   private def weightsForm(view: ProjectView): Frag =
@@ -734,7 +742,7 @@ object Pages:
     case DomainError.InvalidLeistungName(raw) => s"Ungültiger Name der Leistung: '$raw'"
     case DomainError.InvalidStars(n)          => s"Bewertung muss 1 bis 5 Sterne haben, nicht $n"
     case DomainError.InvalidWeights(_)        =>
-      "Gewichtungen müssen zwischen 0 und 100 % liegen, mindestens eine über 0"
+      "Gewichtungen müssen je zwischen 0 und 100 % liegen und zusammen 100 % ergeben"
     case DomainError.DuplicateCategoryId(c)          => s"Kategorie doppelt vorhanden: $c"
     case DomainError.UnknownCategory(by, c)          => s"Unbekannte Kategorie '$c' ($by)"
     case DomainError.LineItemTotalMismatch(exp, act) =>
