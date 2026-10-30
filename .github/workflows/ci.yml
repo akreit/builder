@@ -35,3 +35,16 @@ jobs:
         run: sbt testFull
       - name: Docs (mdoc)
         run: sbt docs/mdoc
+      - name: Stage runtime jars
+        run: sbt stage
+      - name: Docker image
+        run: docker build -t builder:ci .
+      - name: Docker smoke test (/health)
+        run: |
+          docker run -d --name builder-ci -p 127.0.0.1:8080:8080 -e ANTHROPIC_API_KEY=dummy-ci builder:ci
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8080/health; then exit 0; fi
+            sleep 1
+          done
+          docker logs builder-ci
+          exit 1

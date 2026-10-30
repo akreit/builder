@@ -38,6 +38,8 @@ docker compose up --build   # baut das Image und startet die App
 Danach läuft die App unter http://localhost:8080 (anderer Port: `BUILDER_PORT=9090` in `.env`).
 Die SQLite-Daten liegen im benannten Volume `builder-data` (`/data` im Container) und
 bleiben bei `docker compose down` / `up` erhalten. Alles löschen: `docker compose down -v`.
+Die App ist nur lokal erreichbar (Port an `127.0.0.1` gebunden). Wer statt des Volumes ein
+Verzeichnis einbindet (Bind-Mount), muss es dem App-Nutzer geben: `sudo chown -R 10001:10001 ./data`.
 Der Container prüft sich selbst über `/health` (Status `healthy` in `docker compose ps`).
 
 Das Image entsteht ohne zusätzliche sbt-Plugins: `sbt stage` kopiert alle Laufzeit-Jars nach
