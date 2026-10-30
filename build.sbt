@@ -49,3 +49,17 @@ lazy val docs = (project in file("builder-docs"))
     Compile / run / baseDirectory := (ThisBuild / baseDirectory).value,
     publish / skip := true
   )
+
+// Packaging without extra plugins: copies all runtime jars to target/stage/lib
+// (used by the Dockerfile; run with `sbt stage`).
+lazy val stage = taskKey[File]("Copy runtime jars to target/stage/lib")
+
+root / stage := Def.uncached {
+  val conv = fileConverter.value
+  val jars = (root / Runtime / fullClasspathAsJars).value.map(a => conv.toPath(a.data).toFile)
+  val out = (ThisBuild / baseDirectory).value / "target" / "stage" / "lib"
+  IO.delete(out)
+  IO.createDirectory(out)
+  jars.foreach(j => IO.copyFile(j, out / j.getName))
+  out
+}

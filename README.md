@@ -26,6 +26,23 @@ curl http://localhost:8080/          # Projektübersicht (HTML)
 curl -X POST http://localhost:8080/ui/projects/demo/categories/daemmung/favorite/daemmung-b
 ```
 
+## Lokal mit Docker starten
+
+Voraussetzung: Docker mit Compose-Plugin.
+
+```sh
+cp .env.example .env        # ANTHROPIC_API_KEY eintragen (.env wird nicht committet)
+docker compose up --build   # baut das Image und startet die App
+```
+
+Danach läuft die App unter http://localhost:8080 (anderer Port: `BUILDER_PORT=9090` in `.env`).
+Die SQLite-Daten liegen im benannten Volume `builder-data` (`/data` im Container) und
+bleiben bei `docker compose down` / `up` erhalten. Alles löschen: `docker compose down -v`.
+Der Container prüft sich selbst über `/health` (Status `healthy` in `docker compose ps`).
+
+Das Image entsteht ohne zusätzliche sbt-Plugins: `sbt stage` kopiert alle Laufzeit-Jars nach
+`target/stage/lib`, das Runtime-Image (JRE 21, Nutzer ohne Root-Rechte) startet `builder.Main`.
+
 ## Formatting
 
 ```sh
