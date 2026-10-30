@@ -226,13 +226,7 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
   }
 
   private def sql(dir: java.nio.file.Path, statements: String*): IO[Unit] =
-    IO.blocking {
-      val ds = org.sqlite.SQLiteDataSource()
-      ds.setUrl(s"jdbc:sqlite:${dir.resolve("builder.db")}")
-      scala.util.Using.resource(ds.getConnection())(c =>
-        scala.util.Using.resource(c.createStatement())(st => statements.foreach(st.execute))
-      )
-    }
+    TestDb.sql(dir, statements*)
 
   private def page(app: TestApp): IO[String] =
     app.http.run(Request[IO](Method.GET, uri"/")).flatMap(_.bodyText.compile.string)
@@ -259,46 +253,22 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
     )
   }
 
-  "a database of the first version (no schema version, unversioned JSON) is migrated" in {
-    import io.circe.syntax.*
-    val json = dachfenster.asJson.noSpaces.replace("'", "''")
+  "a restart applies no migration twice and keeps all rows" in {
     TestApp.tempDir.use(dir =>
       for
-        _ <- sql(
-          dir,
-          """CREATE TABLE uploads(id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
-            |  category_id TEXT NOT NULL, file_name TEXT NOT NULL, file_type TEXT NOT NULL,
-            |  created_at TEXT NOT NULL, extraction TEXT, failure TEXT)""".stripMargin,
-          """CREATE TABLE favorites(project_id TEXT NOT NULL, category_id TEXT NOT NULL,
-            |  offer_id TEXT NOT NULL, PRIMARY KEY (project_id, category_id))""".stripMargin,
-          s"""INSERT INTO uploads VALUES ('upl-alt', 'demo', 'dachfenster', 'alt.pdf', 'pdf',
-             |  '2026-10-01T10:00:00Z', '$json', NULL)""".stripMargin,
-          "INSERT INTO favorites VALUES ('demo', 'daemmung', 'daemmung-b')"
-        )
-        result <- TestApp
-          .resource(dir, FakeExtractor(Right(dachfenster)))
-          .use(app => page(app).product(net(app)))
+        _ <- TestApp.resource(dir, FakeExtractor(Right(dachfenster))).use(app => upload(app, pdf))
+        _ <- TestApp.resource(dir, FakeExtractor(Right(dachfenster))).use(app => upload(app, pdf))
+        versions <- TestDb.ints(dir, "SELECT version FROM schema_migrations ORDER BY version")
+        uploads <- uploadRows(dir)
       yield
-        val (html, total) = result
-        html should include("Zimmerei Erfunden GmbH")
-        html should not include "wird ignoriert"
-        // 21.118,50 € + Dämmung favorite (10.788,00 €) + the migrated Dachfenster offer (5.010,00 €)
-        total shouldBe "36916.50"
+        versions shouldBe versions.distinct
+        versions should not be empty
+        uploads shouldBe 2
     )
   }
 
   private def uploadRows(dir: java.nio.file.Path): IO[Int] =
-    IO.blocking {
-      val ds = org.sqlite.SQLiteDataSource()
-      ds.setUrl(s"jdbc:sqlite:${dir.resolve("builder.db")}")
-      scala.util.Using.resource(ds.getConnection())(c =>
-        scala.util.Using.resource(c.createStatement())(st =>
-          scala.util.Using.resource(st.executeQuery("SELECT count(*) FROM uploads"))(rs =>
-            if rs.next() then rs.getInt(1) else 0
-          )
-        )
-      )
-    }
+    TestDb.ints(dir, "SELECT count(*)::int FROM uploads").map(_.sum)
 
   "cancelling an upload while it is being read leaves neither file nor row" in {
     for
@@ -331,7 +301,9 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
         _ <- TestApp.resource(dir, FakeExtractor(Right(dachfenster))).use(_ => IO.unit)
         _ <- sql(
           dir,
-          "CREATE TRIGGER kein_upload BEFORE INSERT ON uploads BEGIN SELECT RAISE(ABORT, 'nein'); END"
+          """CREATE FUNCTION nein() RETURNS trigger LANGUAGE plpgsql AS
+            |$$ BEGIN RAISE EXCEPTION 'nein'; END $$""".stripMargin,
+          "CREATE TRIGGER kein_upload BEFORE INSERT ON uploads FOR EACH ROW EXECUTE FUNCTION nein()"
         )
         result <- TestApp.resource(dir, FakeExtractor(Right(dachfenster))).use { app =>
           for
@@ -349,48 +321,18 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
     )
   }
 
-  "a version-3 database keeps its rows on migration and enforces the composite foreign key" in {
-    import io.circe.syntax.*
-    val json = dachfenster.asJson.noSpaces.replace("'", "''")
+  "favorites reference offers by (project, id): another project's offer id is rejected" in {
     TestApp.tempDir.use(dir =>
       for
-        _ <- sql(
-          dir,
-          """CREATE TABLE uploads(id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
-            |  category_id TEXT NOT NULL, file_name TEXT NOT NULL, file_type TEXT NOT NULL,
-            |  created_at TEXT NOT NULL, extraction TEXT, failure TEXT,
-            |  extraction_version INTEGER)""".stripMargin,
-          "CREATE TABLE offers(id TEXT PRIMARY KEY, project_id TEXT NOT NULL)",
-          """CREATE TABLE favorites(project_id TEXT NOT NULL, category_id TEXT NOT NULL,
-            |  offer_id TEXT NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
-            |  PRIMARY KEY (project_id, category_id))""".stripMargin,
-          s"""INSERT INTO uploads VALUES ('upl-v3', 'demo', 'dachfenster', 'v3.pdf', 'pdf',
-             |  '2026-10-02T10:00:00Z', '$json', NULL, 1)""".stripMargin,
-          "INSERT INTO offers VALUES ('upl-v3', 'demo'), ('daemmung-b', 'demo')",
-          "INSERT INTO favorites VALUES ('demo', 'daemmung', 'daemmung-b'), ('demo', 'dachfenster', 'upl-v3')",
-          "PRAGMA user_version = 3"
-        )
-        result <- TestApp
-          .resource(dir, FakeExtractor(Right(dachfenster)))
-          .use(app => page(app).product(net(app)))
+        _ <- TestApp.resource(dir, FakeExtractor(Right(dachfenster))).use(_ => IO.unit)
         // Same offer id, other project: no matching (project_id, id) row in offers.
         foreign <- sql(
           dir,
-          "PRAGMA foreign_keys = ON",
           "INSERT INTO favorites VALUES ('anderes', 'daemmung', 'daemmung-b')"
         ).attempt
-        own <- sql(
-          dir,
-          "PRAGMA foreign_keys = ON",
-          "INSERT INTO favorites VALUES ('demo', 'gauben', 'daemmung-b')"
-        ).attempt
+        own <- sql(dir, "INSERT INTO favorites VALUES ('demo', 'gauben', 'daemmung-b')").attempt
       yield
-        val (html, total) = result
-        html should include("Zimmerei Erfunden GmbH")
-        html should not include "wird ignoriert"
-        // 21.118,50 € + Dämmung favorite (10.788,00 €) + Dachfenster favorite upl-v3 (5.010,00 €)
-        total shouldBe "36916.50"
-        foreign.left.map(_.getMessage.contains("FOREIGN KEY")) shouldBe Left(true)
+        foreign.left.map(_.getMessage.contains("foreign key")) shouldBe Left(true)
         own.isRight shouldBe true
     )
   }

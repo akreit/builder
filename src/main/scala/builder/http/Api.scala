@@ -102,7 +102,7 @@ object TotalsResponse:
 enum ApiError:
   case InvalidProjectId(projectId: String)
   case ProjectNotFound(projectId: String)
-  case StorageFailed(code: Int)
+  case StorageFailed(code: String)
 
 object ApiError:
   given Codec.AsObject[InvalidProjectId] = Codec.AsObject.derived
@@ -309,7 +309,7 @@ final class Api(
           .find(id)
           .map(
             _.map(v => TotalsResponse.from(Totals.compute(v.project))).left.map {
-              case RepoError.Storage(code) => ApiError.StorageFailed(code)
+              case RepoError.Storage(code) => ApiError.StorageFailed(code.value)
               case RepoError.ProjectNotFound(_) | RepoError.CategoryNotFound(_) |
                   RepoError.OfferNotFound(_) | RepoError.LeistungNotFound(_) |
                   RepoError.ItemNotFound(_, _) | RepoError.Invalid(_) | RepoError.Rejected(_) =>
@@ -327,7 +327,7 @@ final class Api(
         case RepoError.Storage(code) =>
           HtmlError(
             StatusCode.InternalServerError,
-            Pages.message(s"Datenbankfehler (Code $code)").render
+            Pages.message(s"Datenbankfehler (Code ${code.value})").render
           )
         case RepoError.ProjectNotFound(_) | RepoError.CategoryNotFound(_) |
             RepoError.OfferNotFound(_) | RepoError.LeistungNotFound(_) |
@@ -382,7 +382,7 @@ final class Api(
     case RepoError.Rejected(reason) =>
       fragmentError(StatusCode.Conflict, reason)
     case RepoError.Storage(code) =>
-      fragmentError(StatusCode.InternalServerError, s"Datenbankfehler (Code $code)")
+      fragmentError(StatusCode.InternalServerError, s"Datenbankfehler (Code ${code.value})")
 
   private def editLogic(
       projectId: String,

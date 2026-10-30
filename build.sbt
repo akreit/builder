@@ -19,7 +19,7 @@ lazy val root = (project in file("."))
       "co.fs2" %% "fs2-core" % fs2V,
       "org.http4s" %% "http4s-ember-server" % http4sV,
       "org.http4s" %% "http4s-ember-client" % http4sV,
-      "org.xerial" % "sqlite-jdbc" % "3.50.3.0",
+      "org.tpolecat" %% "skunk-core" % "1.0.0",
       "io.circe" %% "circe-core" % circeV,
       "io.circe" %% "circe-generic" % circeV,
       "com.softwaremill.sttp.tapir" %% "tapir-core" % tapirV,
@@ -29,6 +29,7 @@ lazy val root = (project in file("."))
       "com.lihaoyi" %% "scalatags" % scalatagsV,
       "io.circe" %% "circe-parser" % circeV,
       "org.scalatest" %% "scalatest" % scalatestV % Test,
+      "com.dimafeng" %% "testcontainers-scala-core" % "0.44.1" % Test,
       "org.typelevel" %% "cats-effect-testkit" % catsEffectV % Test,
       "org.typelevel" %% "cats-effect-testing-scalatest" % "1.8.0" % Test,
       "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test
