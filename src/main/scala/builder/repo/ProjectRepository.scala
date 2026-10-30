@@ -10,9 +10,12 @@ import cats.effect.std.Mutex
 import cats.syntax.all.*
 import io.circe.parser.decode
 import io.circe.syntax.*
-import skunk.codec.all.*
+import skunk.Command
+import skunk.Void
+import skunk.implicits.*
 
 import java.time.Instant
+import java.time.ZoneOffset
 
 enum RepoError:
   case ProjectNotFound(id: ProjectId)
@@ -117,7 +120,7 @@ trait ProjectRepository:
   def edit(id: ProjectId, e: Edit): IO[Either[RepoError, ProjectView]]
 
 /** One `uploads` row as stored; decoded into an [[Upload]] by [[PostgresProjectRepository]]. */
-private final case class UploadRow(
+private[repo] final case class UploadRow(
     id: String,
     category: String,
     fileName: String,
@@ -128,15 +131,20 @@ private final case class UploadRow(
     failure: Option[String]
 )
 
-private final case class CategoryRow(id: String, name: String, position: Int, deleted: Boolean)
-private final case class LeistungRow(id: String, category: String, name: String)
-private final case class AssignmentRow(
+private[repo] final case class CategoryRow(
+    id: String,
+    name: String,
+    position: Int,
+    deleted: Boolean
+)
+private[repo] final case class LeistungRow(id: String, category: String, name: String)
+private[repo] final case class AssignmentRow(
     offer: String,
     item: Int,
     leistung: Option[String],
     manual: Boolean
 )
-private final case class CoverageRow(
+private[repo] final case class CoverageRow(
     offer: String,
     leistung: String,
     status: String,
@@ -157,47 +165,22 @@ final class PostgresProjectRepository private (
   import PostgresProjectRepository.*
 
   private def loadRows(id: ProjectId): IO[Either[RepoError, List[UploadRow]]] =
-    db.query(
-      """SELECT id, category_id, file_name, file_type, created_at, extraction,
-        |  extraction_version, failure
-        |FROM uploads WHERE project_id = ? ORDER BY created_at, id""".stripMargin,
-      List(Param.text(id.value))
-    )(
-      (text *: text *: text *: text *: timestamptz *: text.opt *: int4.opt *: text.opt).map {
-        case (i, c, n, t, at, e, v, f) => UploadRow(i, c, n, t, at.toInstant, e, v, f)
-      }
-    )
+    db.query(Sql.uploads, id.value)
 
   private def loadCategories(id: ProjectId): IO[Either[RepoError, List[CategoryRow]]] =
-    db.query(
-      "SELECT id, name, position, deleted FROM categories WHERE project_id = ? ORDER BY position, id",
-      List(Param.text(id.value))
-    )((text *: text *: int4 *: bool).to[CategoryRow])
+    db.query(Sql.categories, id.value)
 
   private def loadLeistungen(id: ProjectId): IO[Either[RepoError, List[LeistungRow]]] =
-    db.query(
-      """SELECT id, category_id, name FROM leistungen
-        |WHERE project_id = ? AND NOT deleted ORDER BY position, id""".stripMargin,
-      List(Param.text(id.value))
-    )((text *: text *: text).to[LeistungRow])
+    db.query(Sql.leistungen, id.value)
 
   private def loadAssignments(id: ProjectId): IO[Either[RepoError, List[AssignmentRow]]] =
-    db.query(
-      "SELECT offer_id, item, leistung_id, manual FROM item_leistung WHERE project_id = ?",
-      List(Param.text(id.value))
-    )((text *: int4 *: text.opt *: bool).to[AssignmentRow])
+    db.query(Sql.assignments, id.value)
 
   private def loadCoverage(id: ProjectId): IO[Either[RepoError, List[CoverageRow]]] =
-    db.query(
-      "SELECT offer_id, leistung_id, status, page, confidence, manual FROM abdeckung WHERE project_id = ?",
-      List(Param.text(id.value))
-    )((text *: text *: text *: int4.opt *: text.opt *: bool).to[CoverageRow])
+    db.query(Sql.coverage, id.value)
 
   private def loadFavorites(id: ProjectId): IO[Either[RepoError, List[(String, String)]]] =
-    db.query(
-      "SELECT category_id, offer_id FROM favorites WHERE project_id = ? ORDER BY category_id",
-      List(Param.text(id.value))
-    )(text *: text)
+    db.query(Sql.favorites, id.value)
 
   private def status(project: Project, u: Upload): UploadStatus = u.outcome match
     case UploadOutcome.Failed(m) => UploadStatus.ExtractionFailed(m)
@@ -267,18 +250,8 @@ final class PostgresProjectRepository private (
           ls <- EitherT(loadLeistungen(id))
           as <- EitherT(loadAssignments(id))
           cs <- EitherT(loadCoverage(id))
-          rs <- EitherT(
-            db.query(
-              "SELECT contractor_key, stars, note FROM ratings WHERE project_id = ?",
-              List(Param.text(id.value))
-            )(text *: int4 *: text)
-          )
-          ws <- EitherT(
-            db.query(
-              "SELECT criterion, weight FROM weights WHERE project_id = ?",
-              List(Param.text(id.value))
-            )(text *: int4)
-          )
+          rs <- EitherT(db.query(Sql.ratings, id.value))
+          ws <- EitherT(db.query(Sql.weights, id.value))
         yield
           val (base, catWarnings) = withCategories(seed, cats)
           val view = build(base, rows, favorites)
@@ -331,15 +304,7 @@ final class PostgresProjectRepository private (
               case Left(e)  => IO.pure(Left(RepoError.Invalid(e)))
               case Right(_) =>
                 db.transact(
-                  List(
-                    """INSERT INTO favorites(project_id, category_id, offer_id) VALUES (?, ?, ?)
-                      |ON CONFLICT (project_id, category_id) DO UPDATE SET offer_id = excluded.offer_id""".stripMargin ->
-                      List(
-                        Param.text(id.value),
-                        Param.text(category.value),
-                        Param.text(offer.value)
-                      )
-                  )
+                  List(Stmt(Sql.upsertFavorite, (id.value, category.value, offer.value)))
                 ).flatMap(_.fold(e => IO.pure(Left(e)), _ => load(id)))
       }
     )
@@ -385,22 +350,22 @@ final class PostgresProjectRepository private (
       extraction: Option[String],
       version: Option[Int],
       failure: Option[String]
-  ): List[(String, List[Param])] =
+  ): List[Stmt[?]] =
     List(
-      "INSERT INTO offers(id, project_id) VALUES (?, ?)" ->
-        List(Param.text(upload.id.value), Param.text(id.value)),
-      """INSERT INTO uploads(id, project_id, category_id, file_name, file_type, created_at,
-                |  extraction, extraction_version, failure)
-                |VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""".stripMargin -> List(
-        Param.text(upload.id.value),
-        Param.text(id.value),
-        Param.text(upload.category.value),
-        Param.text(upload.fileName),
-        Param.text(upload.fileType.extension),
-        Param.Timestamp(upload.createdAt),
-        Param.Text(extraction),
-        Param.Int4(version),
-        Param.Text(failure)
+      Stmt(Sql.insertOffer, (id.value, upload.id.value)),
+      Stmt(
+        Sql.insertUpload,
+        (
+          id.value,
+          upload.id.value,
+          upload.category.value,
+          upload.fileName,
+          upload.fileType.extension,
+          upload.createdAt.atOffset(ZoneOffset.UTC),
+          extraction,
+          version,
+          failure
+        )
       )
     )
 
@@ -414,26 +379,24 @@ final class PostgresProjectRepository private (
       id: ProjectId,
       offer: OfferId,
       plan: LeistungPlan
-  ): List[(String, List[Param])] =
-    val p = Param.text(id.value)
+  ): List[Stmt[?]] =
+    val p = id.value
     plan.added.map(l =>
-      """INSERT INTO leistungen(project_id, id, category_id, name, position, deleted)
-        |VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM leistungen WHERE project_id = ?), false)""".stripMargin ->
-        List(p, Param.text(l.id.value), Param.text(l.category.value), Param.text(l.name.value), p)
+      Stmt(Sql.insertLeistung, (p, l.id.value, l.category.value, l.name.value))
     ) ++ plan.items.zipWithIndex.map((l, i) =>
-      "INSERT INTO item_leistung(project_id, offer_id, item, leistung_id, manual) VALUES (?, ?, ?, ?, false)" ->
-        List(p, Param.text(offer.value), Param.int(i), Param.Text(l.map(_.value)))
+      Stmt(Sql.insertReadItem, (p, offer.value, i, l.map(_.value)))
     ) ++ plan.coverage.map(c =>
-      """INSERT INTO abdeckung(project_id, offer_id, leistung_id, status, page, confidence, manual)
-        |VALUES (?, ?, ?, ?, ?, ?, false)""".stripMargin ->
-        List(
+      Stmt(
+        Sql.insertReadCoverage,
+        (
           p,
-          Param.text(offer.value),
-          Param.text(c.leistung.value),
-          Param.text(Coverage.code(c.coverage)),
-          Param.Int4(c.page.map(_.value)),
-          Param.text(c.confidence.toString.toLowerCase)
+          offer.value,
+          c.leistung.value,
+          Coverage.code(c.coverage),
+          c.page.map(_.value),
+          c.confidence.toString.toLowerCase
         )
+      )
     )
 
   def edit(id: ProjectId, e: Edit): IO[Either[RepoError, ProjectView]] =
@@ -454,8 +417,8 @@ final class PostgresProjectRepository private (
       view: ProjectView,
       e: Edit,
       fresh: String
-  ): Either[RepoError, List[(String, List[Param])]] =
-    val p = Param.text(id.value)
+  ): Either[RepoError, List[Stmt[?]]] =
+    val p = id.value
     val project = view.project
     def category(c: CategoryId): Either[RepoError, Category] =
       project.categories.find(_.id == c).toRight(RepoError.CategoryNotFound(c))
@@ -479,39 +442,15 @@ final class PostgresProjectRepository private (
         (),
         RepoError.Rejected("Leistung gehört zu einer anderen Kategorie")
       )
-    val upsertCategory =
-      """INSERT INTO categories(project_id, id, name, position, deleted)
-        |VALUES (?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM categories WHERE project_id = ?), ?)
-        |ON CONFLICT(project_id, id) DO UPDATE SET name = excluded.name, deleted = excluded.deleted""".stripMargin
     e match
       case Edit.AddCategory(name) =>
         CategoryId
           .from(s"k-$fresh")
           .left
           .map(RepoError.Invalid(_))
-          .map(c =>
-            List(
-              upsertCategory -> List(
-                p,
-                Param.text(c.value),
-                Param.text(name.value),
-                p,
-                Param.Bool(false)
-              )
-            )
-          )
+          .map(c => List(Stmt(Sql.upsertCategory, (p, c.value, name.value, false))))
       case Edit.RenameCategory(c, name) =>
-        category(c).map(_ =>
-          List(
-            upsertCategory -> List(
-              p,
-              Param.text(c.value),
-              Param.text(name.value),
-              p,
-              Param.Bool(false)
-            )
-          )
-        )
+        category(c).map(_ => List(Stmt(Sql.upsertCategory, (p, c.value, name.value, false))))
       case Edit.DeleteCategory(c) =>
         for
           cat <- category(c)
@@ -536,37 +475,16 @@ final class PostgresProjectRepository private (
                 .Rejected("Kategorie wird von Arbeitspaketen, Angeboten oder Favoriten verwendet")
             )
         yield List(
-          upsertCategory -> List(
-            p,
-            Param.text(c.value),
-            Param.text(cat.name.value),
-            p,
-            Param.Bool(true)
-          ),
-          "UPDATE leistungen SET deleted = true WHERE project_id = ? AND category_id = ?" -> List(
-            p,
-            Param.text(c.value)
-          )
+          Stmt(Sql.upsertCategory, (p, c.value, cat.name.value, true)),
+          Stmt(Sql.deleteLeistungenOfCategory, (p, c.value))
         )
       case Edit.AddLeistung(c, name) =>
         for
           _ <- category(c)
           l <- LeistungId.from(s"l-$fresh").left.map(RepoError.Invalid(_))
-        yield List(
-          """INSERT INTO leistungen(project_id, id, category_id, name, position, deleted)
-            |VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM leistungen WHERE project_id = ?), false)""".stripMargin ->
-            List(p, Param.text(l.value), Param.text(c.value), Param.text(name.value), p)
-        )
+        yield List(Stmt(Sql.insertLeistung, (p, l.value, c.value, name.value)))
       case Edit.RenameLeistung(l, name) =>
-        leistung(l).map(_ =>
-          List(
-            "UPDATE leistungen SET name = ? WHERE project_id = ? AND id = ?" -> List(
-              Param.text(name.value),
-              p,
-              Param.text(l.value)
-            )
-          )
-        )
+        leistung(l).map(_ => List(Stmt(Sql.renameLeistung, (p, l.value, name.value))))
       case Edit.MergeLeistung(from, into) =>
         for
           f <- leistung(from)
@@ -582,37 +500,22 @@ final class PostgresProjectRepository private (
             RepoError.Rejected("Leistungen gehören zu verschiedenen Kategorien")
           )
         yield
-          val ids = List(p, Param.text(from.value))
+          val moved = (p, from.value, into.value)
           List(
-            "UPDATE item_leistung SET leistung_id = ? WHERE project_id = ? AND leistung_id = ?" -> (Param
-              .text(into.value) :: ids),
-            // Read statuses of the target become "enthalten" where the merged one was.
-            """UPDATE abdeckung SET status = 'enthalten'
-              |WHERE project_id = ? AND leistung_id = ? AND NOT manual AND offer_id IN
-              |  (SELECT offer_id FROM abdeckung WHERE project_id = ? AND leistung_id = ? AND NOT manual
-              |   AND status = 'enthalten')""".stripMargin -> List(
-              p,
-              Param.text(into.value),
-              p,
-              Param.text(from.value)
-            ),
-            // Rows that would collide with an existing row of the target are deleted below.
-            """UPDATE abdeckung a SET leistung_id = ? WHERE a.project_id = ? AND a.leistung_id = ?
-              |AND NOT EXISTS (SELECT 1 FROM abdeckung b WHERE b.project_id = a.project_id
-              |  AND b.offer_id = a.offer_id AND b.manual = a.manual AND b.leistung_id = ?)""".stripMargin ->
-              ((Param.text(into.value) :: ids) :+ Param.text(into.value)),
-            "DELETE FROM abdeckung WHERE project_id = ? AND leistung_id = ?" -> ids,
-            "UPDATE leistungen SET deleted = true WHERE project_id = ? AND id = ?" -> ids
+            Stmt(Sql.moveItems, moved),
+            Stmt(Sql.mergeReadCoverage, moved),
+            Stmt(Sql.moveCoverage, moved),
+            Stmt(Sql.deleteCoverageOf, (p, from.value)),
+            Stmt(Sql.deleteLeistung, (p, from.value))
           )
       case Edit.DeleteLeistung(l) =>
-        leistung(l).map { _ =>
-          val ids = List(p, Param.text(l.value))
+        leistung(l).map(_ =>
           List(
-            "UPDATE item_leistung SET leistung_id = NULL WHERE project_id = ? AND leistung_id = ?" -> ids,
-            "DELETE FROM abdeckung WHERE project_id = ? AND leistung_id = ?" -> ids,
-            "UPDATE leistungen SET deleted = true WHERE project_id = ? AND id = ?" -> ids
+            Stmt(Sql.unassignItems, (p, l.value)),
+            Stmt(Sql.deleteCoverageOf, (p, l.value)),
+            Stmt(Sql.deleteLeistung, (p, l.value))
           )
-        }
+        )
       case Edit.AssignItem(o, item, target) =>
         for
           (u, raw) <- upload(o)
@@ -622,40 +525,14 @@ final class PostgresProjectRepository private (
             RepoError.ItemNotFound(o, item)
           )
           _ <- target.traverse(l => leistung(l).flatMap(sameCategory(u, _)))
-        yield List(
-          """INSERT INTO item_leistung(project_id, offer_id, item, leistung_id, manual)
-            |VALUES (?, ?, ?, ?, true)
-            |ON CONFLICT (project_id, offer_id, item, manual)
-            |DO UPDATE SET leistung_id = excluded.leistung_id""".stripMargin -> List(
-            p,
-            Param.text(o.value),
-            Param.int(item),
-            Param.Text(target.map(_.value))
-          )
-        )
+        yield List(Stmt(Sql.upsertManualItem, (p, o.value, item, target.map(_.value))))
       case Edit.RateContractor(c, rating) =>
         Right(rating match
-          case Some(r) =>
-            List(
-              """INSERT INTO ratings(project_id, contractor_key, stars, note) VALUES (?, ?, ?, ?)
-                |ON CONFLICT (project_id, contractor_key)
-                |DO UPDATE SET stars = excluded.stars, note = excluded.note""".stripMargin ->
-                List(p, Param.text(c.value), Param.int(r.stars.value), Param.text(r.note))
-            )
-          case None =>
-            List(
-              "DELETE FROM ratings WHERE project_id = ? AND contractor_key = ?" -> List(
-                p,
-                Param.text(c.value)
-              )
-            ))
+          case Some(r) => List(Stmt(Sql.upsertRating, (p, c.value, r.stars.value, r.note)))
+          case None    => List(Stmt(Sql.deleteRating, (p, c.value))))
       case Edit.SetWeights(ws) =>
         Right(
-          Criterion.values.toList.map(c =>
-            """INSERT INTO weights(project_id, criterion, weight) VALUES (?, ?, ?)
-              |ON CONFLICT (project_id, criterion) DO UPDATE SET weight = excluded.weight""".stripMargin ->
-              List(p, Param.text(Criterion.code(c)), Param.int(ws.of(c)))
-          )
+          Criterion.values.toList.map(c => Stmt(Sql.upsertWeight, (p, Criterion.code(c), ws.of(c))))
         )
       case Edit.SetCoverage(o, l, coverage) =>
         for
@@ -663,18 +540,8 @@ final class PostgresProjectRepository private (
           _ <- leistung(l).flatMap(sameCategory(u, _))
         yield coverage match
           case Some(c) =>
-            List(
-              """INSERT INTO abdeckung(project_id, offer_id, leistung_id, status, page, confidence, manual)
-                |VALUES (?, ?, ?, ?, NULL, NULL, true)
-                |ON CONFLICT (project_id, offer_id, leistung_id, manual)
-                |DO UPDATE SET status = excluded.status, page = NULL, confidence = NULL""".stripMargin ->
-                List(p, Param.text(o.value), Param.text(l.value), Param.text(Coverage.code(c)))
-            )
-          case None =>
-            List(
-              "DELETE FROM abdeckung WHERE project_id = ? AND offer_id = ? AND leistung_id = ? AND manual" ->
-                List(p, Param.text(o.value), Param.text(l.value))
-            )
+            List(Stmt(Sql.upsertManualCoverage, (p, o.value, l.value, Coverage.code(c))))
+          case None => List(Stmt(Sql.deleteManualCoverage, (p, o.value, l.value)))
 
 object PostgresProjectRepository:
   /** Version of the [[RawOffer]] JSON written to `uploads.extraction`. Version 2 added the optional
@@ -761,42 +628,42 @@ object PostgresProjectRepository:
   /** Versioned schema migrations, recorded in `schema_migrations`. Applied in order, each in its
     * own transaction; never edit a released migration, add a new one instead.
     */
-  private[repo] val migrations: List[(Int, List[String])] = List(
+  private[repo] val migrations: List[(Int, List[Command[Void]])] = List(
     1 -> List(
-      """CREATE TABLE offers(project_id TEXT NOT NULL, id TEXT NOT NULL,
-        |  PRIMARY KEY (project_id, id))""".stripMargin,
-      """CREATE TABLE uploads(project_id TEXT NOT NULL, id TEXT NOT NULL,
-        |  category_id TEXT NOT NULL, file_name TEXT NOT NULL, file_type TEXT NOT NULL,
-        |  created_at TIMESTAMPTZ NOT NULL, extraction TEXT, extraction_version INTEGER,
-        |  failure TEXT, PRIMARY KEY (project_id, id),
-        |  FOREIGN KEY (project_id, id) REFERENCES offers(project_id, id) ON DELETE CASCADE)""".stripMargin,
-      """CREATE TABLE favorites(project_id TEXT NOT NULL, category_id TEXT NOT NULL,
-        |  offer_id TEXT NOT NULL, PRIMARY KEY (project_id, category_id),
-        |  FOREIGN KEY (project_id, offer_id) REFERENCES offers(project_id, id) ON DELETE CASCADE)""".stripMargin,
+      sql"""CREATE TABLE offers(project_id TEXT NOT NULL, id TEXT NOT NULL,
+            PRIMARY KEY (project_id, id))""".command,
+      sql"""CREATE TABLE uploads(project_id TEXT NOT NULL, id TEXT NOT NULL,
+            category_id TEXT NOT NULL, file_name TEXT NOT NULL, file_type TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL, extraction TEXT, extraction_version INTEGER,
+            failure TEXT, PRIMARY KEY (project_id, id),
+            FOREIGN KEY (project_id, id) REFERENCES offers(project_id, id) ON DELETE CASCADE)""".command,
+      sql"""CREATE TABLE favorites(project_id TEXT NOT NULL, category_id TEXT NOT NULL,
+            offer_id TEXT NOT NULL, PRIMARY KEY (project_id, category_id),
+            FOREIGN KEY (project_id, offer_id) REFERENCES offers(project_id, id) ON DELETE CASCADE)""".command,
       // Category changes, Leistungen per category, item assignments and coverage. Rows with
       // manual = true are user edits and take precedence over extracted ones.
-      """CREATE TABLE categories(project_id TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL,
-        |  position INTEGER NOT NULL, deleted BOOLEAN NOT NULL DEFAULT false,
-        |  PRIMARY KEY (project_id, id))""".stripMargin,
-      """CREATE TABLE leistungen(project_id TEXT NOT NULL, id TEXT NOT NULL,
-        |  category_id TEXT NOT NULL, name TEXT NOT NULL, position INTEGER NOT NULL,
-        |  deleted BOOLEAN NOT NULL DEFAULT false, PRIMARY KEY (project_id, id))""".stripMargin,
-      """CREATE TABLE item_leistung(project_id TEXT NOT NULL, offer_id TEXT NOT NULL,
-        |  item INTEGER NOT NULL, leistung_id TEXT, manual BOOLEAN NOT NULL,
-        |  PRIMARY KEY (project_id, offer_id, item, manual),
-        |  FOREIGN KEY (project_id, offer_id) REFERENCES offers(project_id, id) ON DELETE CASCADE,
-        |  FOREIGN KEY (project_id, leistung_id) REFERENCES leistungen(project_id, id))""".stripMargin,
-      """CREATE TABLE abdeckung(project_id TEXT NOT NULL, offer_id TEXT NOT NULL,
-        |  leistung_id TEXT NOT NULL, status TEXT NOT NULL, page INTEGER, confidence TEXT,
-        |  manual BOOLEAN NOT NULL, PRIMARY KEY (project_id, offer_id, leistung_id, manual),
-        |  FOREIGN KEY (project_id, offer_id) REFERENCES offers(project_id, id) ON DELETE CASCADE,
-        |  FOREIGN KEY (project_id, leistung_id) REFERENCES leistungen(project_id, id))""".stripMargin,
+      sql"""CREATE TABLE categories(project_id TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL,
+            position INTEGER NOT NULL, deleted BOOLEAN NOT NULL DEFAULT false,
+            PRIMARY KEY (project_id, id))""".command,
+      sql"""CREATE TABLE leistungen(project_id TEXT NOT NULL, id TEXT NOT NULL,
+            category_id TEXT NOT NULL, name TEXT NOT NULL, position INTEGER NOT NULL,
+            deleted BOOLEAN NOT NULL DEFAULT false, PRIMARY KEY (project_id, id))""".command,
+      sql"""CREATE TABLE item_leistung(project_id TEXT NOT NULL, offer_id TEXT NOT NULL,
+            item INTEGER NOT NULL, leistung_id TEXT, manual BOOLEAN NOT NULL,
+            PRIMARY KEY (project_id, offer_id, item, manual),
+            FOREIGN KEY (project_id, offer_id) REFERENCES offers(project_id, id) ON DELETE CASCADE,
+            FOREIGN KEY (project_id, leistung_id) REFERENCES leistungen(project_id, id))""".command,
+      sql"""CREATE TABLE abdeckung(project_id TEXT NOT NULL, offer_id TEXT NOT NULL,
+            leistung_id TEXT NOT NULL, status TEXT NOT NULL, page INTEGER, confidence TEXT,
+            manual BOOLEAN NOT NULL, PRIMARY KEY (project_id, offer_id, leistung_id, manual),
+            FOREIGN KEY (project_id, offer_id) REFERENCES offers(project_id, id) ON DELETE CASCADE,
+            FOREIGN KEY (project_id, leistung_id) REFERENCES leistungen(project_id, id))""".command,
       // Ranking: reference ratings per contractor (by normalised name) and criterion weights.
-      """CREATE TABLE ratings(project_id TEXT NOT NULL, contractor_key TEXT NOT NULL,
-        |  stars INTEGER NOT NULL CHECK (stars BETWEEN 1 AND 5), note TEXT NOT NULL,
-        |  PRIMARY KEY (project_id, contractor_key))""".stripMargin,
-      """CREATE TABLE weights(project_id TEXT NOT NULL, criterion TEXT NOT NULL,
-        |  weight INTEGER NOT NULL, PRIMARY KEY (project_id, criterion))""".stripMargin
+      sql"""CREATE TABLE ratings(project_id TEXT NOT NULL, contractor_key TEXT NOT NULL,
+            stars INTEGER NOT NULL CHECK (stars BETWEEN 1 AND 5), note TEXT NOT NULL,
+            PRIMARY KEY (project_id, contractor_key))""".command,
+      sql"""CREATE TABLE weights(project_id TEXT NOT NULL, criterion TEXT NOT NULL,
+            weight INTEGER NOT NULL, PRIMARY KEY (project_id, criterion))""".command
     )
   )
 
@@ -810,34 +677,19 @@ object PostgresProjectRepository:
   ): IO[Either[RepoError, Unit]] =
     val seedOffers = seeds.flatMap(p => p.offers.map(o => (o.id.value, p.id.value)))
     val steps = for
-      _ <- EitherT(
-        db.transact(
-          List(
-            """CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY,
-              |  applied_at TIMESTAMPTZ NOT NULL DEFAULT now())""".stripMargin -> Nil
-          )
-        )
-      )
       _ <- migrations.traverse_((version, statements) =>
         EitherT(db.migration(MigrationLock, version, statements))
       )
       _ <- EitherT(
         db.transact(
-          seedOffers.map((o, p) =>
-            "INSERT INTO offers(id, project_id) VALUES (?, ?) ON CONFLICT DO NOTHING" ->
-              List(Param.text(o), Param.text(p))
-          ) ++ leistungen.zipWithIndex.map { case ((p, l), i) =>
-            // Seed Leistungen are inserted once; renames and deletions of them are kept.
-            """INSERT INTO leistungen(project_id, id, category_id, name, position, deleted)
-              |VALUES (?, ?, ?, ?, ?, false) ON CONFLICT DO NOTHING""".stripMargin ->
-              List(
-                Param.text(p.value),
-                Param.text(l.id.value),
-                Param.text(l.category.value),
-                Param.text(l.name.value),
-                Param.int(i - 1000)
+          seedOffers.map((o, p) => Stmt(Sql.insertSeedOffer, (p, o))) ++
+            leistungen.zipWithIndex.map { case ((p, l), i) =>
+              // Seed Leistungen are inserted once; renames and deletions of them are kept.
+              Stmt(
+                Sql.insertSeedLeistung,
+                (p.value, l.id.value, l.category.value, l.name.value, i - 1000)
               )
-          }
+            }
         )
       )
     yield ()

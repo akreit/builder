@@ -6,15 +6,14 @@ import cats.effect.std.Console
 import cats.syntax.all.*
 import org.typelevel.otel4s.metrics.Meter
 import org.typelevel.otel4s.trace.Tracer
-import skunk.*
-import skunk.codec.all.*
+import skunk.Command
+import skunk.Query
+import skunk.Session
+import skunk.Void
 import skunk.exception.PostgresErrorException
-import skunk.implicits.*
-import skunk.util.Origin
+import skunk.exception.SkunkException
 
 import java.net.URI
-import java.time.Instant
-import java.time.ZoneOffset
 
 /** A Postgres SQLSTATE (five characters, e.g. `23503` for a foreign key violation). */
 opaque type SqlState = String
@@ -23,27 +22,11 @@ object SqlState:
   def apply(code: String): SqlState = code
   extension (s: SqlState) def value: String = s
 
-/** A statement parameter; `?` placeholders in SQL are bound to these in order. */
-enum Param:
-  case Text(value: Option[String])
-  case Int4(value: Option[Int])
-  case Bool(value: Boolean)
-  case Timestamp(value: Instant)
-
-object Param:
-  def text(s: String): Param = Text(Some(s))
-  def int(i: Int): Param = Int4(Some(i))
-
-  private def encoder(p: Param): Encoder[Void] = p match
-    case Text(v)      => skunk.codec.all.text.opt.contramap[Void](_ => v)
-    case Int4(v)      => int4.opt.contramap[Void](_ => v)
-    case Bool(v)      => bool.contramap[Void](_ => v)
-    case Timestamp(v) => timestamptz.contramap[Void](_ => v.atOffset(ZoneOffset.UTC))
-
-  private[repo] def encoderOf(params: List[Param]): Encoder[Void] =
-    params
-      .map(encoder)
-      .foldLeft(Void.codec: Encoder[Void])((acc, e) => acc.product(e).contramap[Void](v => (v, v)))
+/** A typed command and its arguments, so statements with different parameter types can run in one
+  * transaction.
+  */
+final case class Stmt[A](command: Command[A], args: A):
+  private[repo] def run(s: Session[IO]): IO[Unit] = s.prepare(command).flatMap(_.execute(args)).void
 
 /** Why a database configuration could not be read from the environment. */
 enum DbConfigError:
@@ -101,67 +84,49 @@ object DbConfig:
           DbConfig(host, if uri.getPort > 0 then uri.getPort else 5432, user, password, db)
       )
 
-/** A pool of Skunk sessions. Postgres errors become [[RepoError.Storage]] with their SQLSTATE. */
+/** A pool of Skunk sessions. Postgres errors become [[RepoError.Storage]] with their SQLSTATE; lost
+  * or refused connections and other Skunk protocol failures become `08000` (connection_exception),
+  * so callers show a storage error instead of crashing.
+  */
 final class Postgres private (pool: Resource[IO, Session[IO]]):
   private def run[A](io: IO[A]): IO[Either[RepoError, A]] =
-    io.attemptNarrow[PostgresErrorException]
-      .map(_.left.map(e => RepoError.Storage(SqlState(e.code))))
+    io.attempt.flatMap {
+      case Right(a)                        => IO.pure(Right(a))
+      case Left(e: PostgresErrorException) => IO.pure(Left(RepoError.Storage(SqlState(e.code))))
+      case Left(_: SkunkException)         => IO.pure(Left(Postgres.ConnectionLost))
+      case Left(_: java.io.IOException)    => IO.pure(Left(Postgres.ConnectionLost))
+      case Left(e)                         => IO.raiseError(e)
+    }
 
-  /** Replaces the `?` placeholders with `$1, $2, ...`. */
-  private def numbered(sql: String): String =
-    sql
-      .split("\\?", -1)
-      .toList
-      .zipWithIndex
-      .map((part, i) => if i == 0 then part else s"$$$i$part")
-      .mkString
-
-  private def exec(s: Session[IO], c: Command[Void]): IO[Unit] =
-    s.prepare(c).flatMap(_.execute(Void)).void
-
-  private def command(sql: String, params: List[Param]): Command[Void] =
-    Command(numbered(sql), Origin.unknown, Param.encoderOf(params))
-
-  def query[A](sql: String, params: List[Param])(
-      decoder: Decoder[A]
-  ): IO[Either[RepoError, List[A]]] =
-    run(
-      pool.use(
-        // Prepared (extended protocol), so the parameters are bound; Void-typed `execute` would
-        // use the simple protocol, which has no parameters.
-        _.prepare(Query(numbered(sql), Origin.unknown, Param.encoderOf(params), decoder))
-          .flatMap(_.stream(Void, 256).compile.toList)
-      )
-    )
+  /** Runs `q` as a prepared statement with `args`. */
+  def query[A, B](q: Query[A, B], args: A): IO[Either[RepoError, List[B]]] =
+    run(pool.use(_.prepare(q).flatMap(_.stream(args, 256).compile.toList)))
 
   /** Runs all statements in one transaction: committed if all succeed, rolled back otherwise. */
-  def transact(statements: List[(String, List[Param])]): IO[Either[RepoError, Unit]] =
-    run(
-      pool.use(s =>
-        s.transaction.use(_ => statements.traverse_((sql, params) => exec(s, command(sql, params))))
-      )
-    )
+  def transact(statements: List[Stmt[?]]): IO[Either[RepoError, Unit]] =
+    run(pool.use(s => s.transaction.use(_ => statements.traverse_(_.run(s)))))
 
-  /** Applies migration `version` unless `schema_migrations` already records it. Holds the advisory
-    * lock `lock` for the transaction, so concurrent starts apply each migration once.
+  /** Applies migration `version` unless `schema_migrations` already records it. The advisory lock
+    * `lock` is taken first in the same transaction, before `schema_migrations` is created, so
+    * concurrent starts on an empty database create the table and apply each migration once.
     */
-  def migration(lock: Long, version: Int, statements: List[String]): IO[Either[RepoError, Unit]] =
+  def migration(
+      lock: Long,
+      version: Int,
+      statements: List[Command[Void]]
+  ): IO[Either[RepoError, Unit]] =
     run(
       pool.use(s =>
         s.transaction.use(_ =>
-          s.execute(sql"SELECT 1 FROM (SELECT pg_advisory_xact_lock($int8)) AS l".query(int4))(
-            lock
-          ) >>
-            s.execute(sql"SELECT version FROM schema_migrations WHERE version = $int4".query(int4))(
-              version
-            ).flatMap(applied =>
-              if applied.nonEmpty then IO.unit
-              else
-                statements.traverse_(st => exec(s, command(st, Nil))) >>
-                  s.execute(sql"INSERT INTO schema_migrations(version) VALUES ($int4)".command)(
-                    version
-                  ).void
-            )
+          s.execute(Sql.lockMigrations)(lock) >>
+            s.execute(Sql.createMigrationsTable) >>
+            s.execute(Sql.appliedVersion)(version)
+              .flatMap(applied =>
+                if applied.nonEmpty then IO.unit
+                else
+                  statements.traverse_(c => s.execute(c)) >>
+                    s.execute(Sql.recordVersion)(version).void
+              )
         )
       )
     )
@@ -170,6 +135,9 @@ object Postgres:
   given Tracer[IO] = Tracer.Implicits.noop
   given Meter[IO] = Meter.Implicits.noop
   given Console[IO] = Console.make[IO]
+
+  /** SQLSTATE class 08 (connection_exception). */
+  val ConnectionLost: RepoError = RepoError.Storage(SqlState("08000"))
 
   /** A session pool of at most `max` connections. */
   def resource(config: DbConfig, max: Int = 10): Resource[IO, Postgres] =

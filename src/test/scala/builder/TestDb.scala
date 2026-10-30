@@ -8,6 +8,7 @@ import cats.syntax.all.*
 import com.dimafeng.testcontainers.GenericContainer
 import org.testcontainers.containers.wait.strategy.Wait
 import skunk.*
+import skunk.codec.all.bool
 import skunk.codec.all.int4
 import skunk.util.Origin
 
@@ -27,7 +28,7 @@ object TestDb:
         DbConfig.fromEnv(Map("DATABASE_URL" -> url)).left.map(e => s"BUILDER_TEST_DATABASE_URL: $e")
       case None =>
         val c = GenericContainer(
-          "postgres:17-alpine",
+          "postgres:17-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b",
           exposedPorts = Seq(5432),
           env = Map("POSTGRES_PASSWORD" -> "test"),
           waitStrategy = Wait.forLogMessage(".*ready to accept connections.*", 2)
@@ -63,6 +64,23 @@ object TestDb:
   def database(dir: Path): Resource[IO, Unit] =
     Resource.make(admin(s"CREATE DATABASE ${nameOf(dir)}"))(_ =>
       admin(s"DROP DATABASE IF EXISTS ${nameOf(dir)} WITH (FORCE)")
+    )
+
+  /** Closes every open connection to the database of `dir`, as a lost connection would. */
+  def terminateConnections(dir: Path): IO[Unit] =
+    server.flatMap(s =>
+      session(s)
+        .use(
+          _.execute(
+            Query(
+              s"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${nameOf(dir)}'",
+              Origin.unknown,
+              Void.codec,
+              bool
+            )
+          )
+        )
+        .void
     )
 
   /** Runs `statements` in order, each on its own, against the database of `dir`. */

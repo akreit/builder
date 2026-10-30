@@ -43,7 +43,7 @@ jobs:
         run: |
           docker network create builder-ci
           docker run -d --name builder-ci-db --network builder-ci \
-            -e POSTGRES_USER=builder -e POSTGRES_PASSWORD=ci -e POSTGRES_DB=builder postgres:17-alpine
+            -e POSTGRES_USER=builder -e POSTGRES_PASSWORD=ci -e POSTGRES_DB=builder postgres:17-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
           until docker exec builder-ci-db pg_isready -h 127.0.0.1 -U builder -d builder; do sleep 1; done
           docker run -d --name builder-ci --network builder-ci -p 127.0.0.1:8080:8080 \
             -e ANTHROPIC_API_KEY=dummy-ci -e DATABASE_URL=postgres://builder:ci@builder-ci-db:5432/builder \

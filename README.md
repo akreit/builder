@@ -49,6 +49,11 @@ Das Image entsteht ohne zusätzliche sbt-Plugins: `sbt stage` kopiert alle Laufz
 
 ## Datenbank
 
+> **Achtung beim Umstieg von SQLite (Stand vor #8):** Daten der SQLite-Version werden **nicht**
+> übernommen, es gibt keinen Import. Bisher gab es nur Testdaten. Alte Uploads und das alte Volume
+> einmal entfernen mit `docker compose down -v`, danach `docker compose up -d --build` startet mit
+> einer leeren Postgres-Datenbank.
+
 Die App speichert in Postgres (Zugriff mit [Skunk](https://typelevel.org/skunk/)). Verbindung über
 `DATABASE_URL` (`postgres://user:passwort@host:5432/db`) oder einzeln `DATABASE_HOST`,
 `DATABASE_PORT` (Default 5432), `DATABASE_USER`, `DATABASE_PASSWORD`, `DATABASE_NAME`.

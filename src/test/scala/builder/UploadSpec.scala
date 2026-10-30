@@ -4,6 +4,7 @@ import builder.RawOffers.CountingExtractor
 import builder.extraction.*
 import cats.effect.IO
 import cats.effect.testing.scalatest.AsyncIOSpec
+import cats.syntax.all.*
 import fs2.Stream
 import io.circe.parser.parse
 import org.http4s.*
@@ -264,6 +265,41 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
         versions shouldBe versions.distinct
         versions should not be empty
         uploads shouldBe 2
+    )
+  }
+
+  "two starts migrating an empty database in parallel apply each migration once" in {
+    List
+      .range(0, 5)
+      .traverse(_ =>
+        TestApp.tempDir.use(dir =>
+          val start = TestApp.resource(dir, FakeExtractor(Right(dachfenster))).use(page)
+          for
+            pages <- (start, start).parTupled
+            versions <- TestDb.ints(dir, "SELECT version FROM schema_migrations ORDER BY version")
+          yield (
+            pages._1.contains("Datenbankfehler"),
+            pages._2.contains("Datenbankfehler"),
+            versions
+          )
+        )
+      )
+      .map(_ shouldBe List.fill(5)((false, false, List(1))))
+  }
+
+  "a lost database connection is shown as a storage error, not a crash" in {
+    TestApp.tempDir.use(dir =>
+      TestApp.resource(dir, FakeExtractor(Right(dachfenster))).use { app =>
+        for
+          before <- page(app)
+          _ <- TestDb.terminateConnections(dir)
+          response <- app.http.run(Request[IO](Method.GET, uri"/"))
+          body <- response.bodyText.compile.string
+        yield
+          before should not include "Datenbankfehler"
+          response.status shouldBe Status.InternalServerError
+          body should include("Datenbankfehler (Code 08000)")
+      }
     )
   }
 
