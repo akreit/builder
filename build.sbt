@@ -49,3 +49,20 @@ lazy val docs = (project in file("builder-docs"))
     Compile / run / baseDirectory := (ThisBuild / baseDirectory).value,
     publish / skip := true
   )
+
+// Packaging without extra plugins: copies all runtime jars to target/stage/lib
+// (used by the Dockerfile; run with `sbt stage`).
+lazy val stage = taskKey[File]("Copy runtime jars to target/stage/lib")
+
+root / stage := Def.uncached {
+  val conv = fileConverter.value
+  val jars = (root / Runtime / fullClasspathAsJars).value.map(a => conv.toPath(a.data).toFile)
+  val out = (ThisBuild / baseDirectory).value / "target" / "stage" / "lib"
+  val duplicates = jars.groupBy(_.getName).collect { case (n, fs) if fs.size > 1 => n }
+  if (duplicates.nonEmpty)
+    sys.error(s"stage: mehrere Jars mit gleichem Namen: ${duplicates.mkString(", ")}")
+  IO.delete(out)
+  IO.createDirectory(out)
+  jars.foreach(j => IO.copyFile(j, out / j.getName))
+  out
+}

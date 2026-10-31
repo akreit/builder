@@ -1,0 +1,17 @@
+target/
+project/target/
+project/project/
+builder-docs/
+docs/
+.bsp/
+.bloop/
+.metals/
+.idea/
+.vscode/
+.git/
+data/
+.env
+.env.*
+*.log
+Dockerfile
+docker-compose.yml
