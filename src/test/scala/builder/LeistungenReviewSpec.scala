@@ -4,18 +4,14 @@ import builder.domain.*
 import builder.extraction.*
 import cats.effect.IO
 import cats.effect.testing.scalatest.AsyncIOSpec
+import cats.syntax.all.*
 import fs2.Stream
-import io.circe.syntax.*
 import org.http4s.*
 import org.http4s.multipart.Multiparts
 import org.http4s.multipart.Part
 import org.scalatest.EitherValues
 import org.scalatest.freespec.AsyncFreeSpec
 import org.scalatest.matchers.should.Matchers
-
-import java.nio.file.Path
-import java.sql.DriverManager
-import scala.util.Using
 
 /** Review follow-ups of the Leistungen feature: limits, status codes, check sums, upgrades. */
 class LeistungenReviewSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with EitherValues:
@@ -222,61 +218,27 @@ class LeistungenReviewSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers 
 
   // ---- upgrade -------------------------------------------------------------------------------
 
-  private def jdbc[A](db: Path)(f: java.sql.Statement => A): IO[A] =
-    IO.blocking(
-      Using.resource(DriverManager.getConnection(s"jdbc:sqlite:$db"))(c =>
-        Using.resource(c.createStatement())(f)
-      )
-    )
-
-  private def ints(s: java.sql.Statement, sql: String): List[Int] =
-    Using.resource(s.executeQuery(sql))(rs =>
-      Iterator.continually(rs).takeWhile(_.next()).map(_.getInt(1)).toList
-    )
-
-  /** The schema as it was after migration 4, before Leistungen existed. */
-  private val v4: List[String] = List(
-    """CREATE TABLE uploads(id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
-      |  category_id TEXT NOT NULL, file_name TEXT NOT NULL, file_type TEXT NOT NULL,
-      |  created_at TEXT NOT NULL, extraction TEXT, failure TEXT,
-      |  extraction_version INTEGER)""".stripMargin,
-    """CREATE TABLE offers(project_id TEXT NOT NULL, id TEXT NOT NULL,
-      |  PRIMARY KEY (project_id, id))""".stripMargin,
-    """CREATE TABLE favorites(project_id TEXT NOT NULL, category_id TEXT NOT NULL,
-      |  offer_id TEXT NOT NULL, PRIMARY KEY (project_id, category_id),
-      |  FOREIGN KEY (project_id, offer_id) REFERENCES offers(project_id, id)
-      |  ON DELETE CASCADE)""".stripMargin
-  )
-
-  "a database from before Leistungen keeps its offers, uploads and favorites" in {
+  "after a restart offers, uploads and favorites are still there and all foreign keys hold" in {
     TestApp.tempDir.use { dir =>
-      val db = dir.resolve("builder.db")
-      val json = dachfenster.asJson.noSpaces.replace("'", "''")
+      val extractor = RecordingExtractor(List(dachfenster))
       for
-        _ <- jdbc(db) { s =>
-          v4.foreach(s.executeUpdate)
-          s.executeUpdate(
-            s"""INSERT INTO uploads VALUES ('upl-alt', 'demo', 'dachfenster', 'alt.pdf', 'pdf',
-               |  '2026-10-01T10:00:00Z', '$json', NULL, 1)""".stripMargin
-          )
-          s.executeUpdate("INSERT INTO offers VALUES ('demo', 'upl-alt')")
-          s.executeUpdate("INSERT INTO favorites VALUES ('demo', 'dachfenster', 'upl-alt')")
-          s.executeUpdate("PRAGMA user_version = 4")
-        }
-        (_, html) <- TestApp
-          .resource(dir, RecordingExtractor(Nil))
-          .use(app => run(app, Request[IO](Method.GET, Uri.unsafeFromString("/"))))
-        counts <- jdbc(db)(s =>
-          List("uploads", "offers WHERE id = 'upl-alt'", "favorites").flatMap(t =>
-            ints(s, s"SELECT count(*) FROM $t")
-          )
+        (_, first) <- TestApp.resource(dir, extractor).use(app => upload(app, "dachfenster"))
+        _ <- TestDb.sql(
+          dir,
+          "INSERT INTO favorites SELECT project_id, category_id, id FROM uploads"
         )
-        version <- jdbc(db)(ints(_, "PRAGMA user_version"))
-        violations <- jdbc(db)(ints(_, "SELECT count(*) FROM pragma_foreign_key_check"))
+        (_, html) <- TestApp
+          .resource(dir, extractor)
+          .use(app => run(app, Request[IO](Method.GET, Uri.unsafeFromString("/"))))
+        counts <- List("uploads", "offers o JOIN uploads u USING (project_id, id)", "favorites")
+          .flatTraverse(t => TestDb.ints(dir, s"SELECT count(*)::int FROM $t"))
+        orphanFavorite <- TestDb
+          .sql(dir, "INSERT INTO favorites VALUES ('demo', 'gauben', 'gibtsnicht')")
+          .attempt
       yield
+        first should include("Zimmerei Erfunden GmbH")
         counts shouldBe List(1, 1, 1)
-        version.headOption.exists(_ >= 5) shouldBe true
-        violations shouldBe List(0)
+        orphanFavorite.isLeft shouldBe true
         html should include("Zimmerei Erfunden GmbH")
         html should include("gezählt (Favorit)")
         html should include("Pos. 1: Dachfenster liefern")

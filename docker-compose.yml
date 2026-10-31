@@ -1,16 +1,42 @@
 services:
+  db:
+    image: postgres:17-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-builder}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD fehlt (in .env oder Shell setzen)}
+      POSTGRES_DB: ${POSTGRES_DB:-builder}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - builder-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   builder:
     build: .
     image: builder:local
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "127.0.0.1:${BUILDER_PORT:-8080}:8080"
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY fehlt (in .env oder Shell setzen)}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
       BUILDER_DATA_DIR: /data
+      DATABASE_HOST: db
+      DATABASE_PORT: "5432"
+      DATABASE_USER: ${POSTGRES_USER:-builder}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_NAME: ${POSTGRES_DB:-builder}
     volumes:
       - builder-data:/data
     restart: unless-stopped
 
 volumes:
   builder-data:
+  builder-pg:

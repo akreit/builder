@@ -4,7 +4,8 @@ import builder.extraction.ApiKey
 import builder.extraction.ClaudeOfferExtractor
 import builder.extraction.OfferExtractor
 import builder.http.Api
-import builder.repo.SqliteProjectRepository
+import builder.repo.DbConfig
+import builder.repo.PostgresProjectRepository
 import builder.storage.FileStore
 import cats.effect.IO
 import cats.effect.IOApp
@@ -14,8 +15,9 @@ import org.http4s.ember.server.EmberServerBuilder
 import java.nio.file.Path
 import scala.concurrent.duration.*
 
-/** Configuration from the environment: `PORT`, `HOST`, `BUILDER_DATA_DIR` (SQLite database and
-  * uploaded files, default `./data`), `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`.
+/** Configuration from the environment: `PORT`, `HOST`, `BUILDER_DATA_DIR` (uploaded files, default
+  * `./data`), the Postgres connection (`DATABASE_URL` or `DATABASE_HOST`, `DATABASE_PORT`,
+  * `DATABASE_USER`, `DATABASE_PASSWORD`, `DATABASE_NAME`), `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`.
   */
 object Main extends IOApp.Simple:
   private val port: Port =
@@ -41,8 +43,16 @@ object Main extends IOApp.Simple:
           SampleData.leistungen.left.map(e => IllegalStateException(s"Invalid sample data: $e"))
         )
       )
-      repo <- SqliteProjectRepository.resource(
-        dataDir.resolve("builder.db"),
+      db <- cats.effect.Resource.eval(
+        IO.fromEither(
+          DbConfig
+            .fromEnv(sys.env)
+            .left
+            .map(e => IllegalStateException(s"Datenbank-Konfiguration ungültig: $e"))
+        )
+      )
+      repo <- PostgresProjectRepository.resource(
+        db,
         List(project),
         leistungen
       )
@@ -58,11 +68,11 @@ object Main extends IOApp.Simple:
           Api(repo, project.id, extractor, FileStore(dataDir.resolve("angebote"))).routes.orNotFound
         )
         .build
-    yield server
+    yield (server, db)
     app
-      .evalTap(s =>
+      .evalTap((s, db) =>
         IO.println(
-          s"builder listening on ${s.address} (Daten: ${dataDir.toAbsolutePath}, Modell: $model, " +
+          s"builder listening on ${s.address} (Datenbank: $db, Dateien: ${dataDir.toAbsolutePath}, Modell: $model, " +
             s"API-Schlüssel ${if ApiKey.fromEnv.isDefined then "gesetzt" else "fehlt"})"
         )
       )
