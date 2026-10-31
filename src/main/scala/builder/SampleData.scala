@@ -1,6 +1,7 @@
 package builder
 
 import builder.domain.*
+import cats.syntax.all.*
 
 /** Demo project "Dach" served by the in-memory repository.
   *
@@ -142,3 +143,18 @@ object SampleData:
         favorites = Map(gauben.id -> g1.id)
       )
     yield p
+
+  /** Coarse default Leistungen (work steps) per category, seeded once; extractions add more. */
+  val leistungen: Either[DomainError, List[(ProjectId, Leistung)]] =
+    for
+      pid <- ProjectId.from("demo")
+      fenster <- CategoryId.from("dachfenster")
+      ls <- List(
+        "dachfenster-fenster" -> "Fenster inkl. Zubehör",
+        "dachfenster-einbau" -> "Einbau",
+        "dachfenster-innenausbau" -> "Innenausbau",
+        "dachfenster-entsorgung" -> "Entsorgung"
+      ).traverse((id, name) =>
+        (LeistungId.from(id), LeistungName.from(name)).mapN(Leistung(_, fenster, _))
+      )
+    yield ls.map(pid -> _)

@@ -209,7 +209,11 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
 
   "when reading fails with an error, the saved file is removed again" in {
     val failing = new OfferExtractor[IO]:
-      def extract(file: Array[Byte], fileType: OfferFileType) =
+      def extract(
+          file: Array[Byte],
+          fileType: OfferFileType,
+          known: List[builder.domain.Leistung]
+      ) =
         IO.raiseError(IllegalStateException("kaputt"))
     TestApp.fresh(failing).use { app =>
       for
@@ -300,7 +304,11 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
     for
       started <- cats.effect.Deferred[IO, Unit]
       hanging = new OfferExtractor[IO]:
-        def extract(file: Array[Byte], fileType: OfferFileType) =
+        def extract(
+            file: Array[Byte],
+            fileType: OfferFileType,
+            known: List[builder.domain.Leistung]
+        ) =
           started.complete(()) >> IO.never
       result <- TestApp.tempDir.use(dir =>
         TestApp.resource(dir, hanging).use { app =>

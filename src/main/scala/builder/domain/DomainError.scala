@@ -14,6 +14,7 @@ enum DomainError:
   case LineItemsMismatch(lineItemsTotal: Money, net: Money)
   case DuplicateOfferId(offerId: String)
   case InvalidCategoryName(raw: String)
+  case InvalidLeistungName(raw: String)
   case DuplicateCategoryId(categoryId: String)
 
   /** A work package, offer or favorite references a category the project does not have. */

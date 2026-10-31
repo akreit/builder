@@ -1,5 +1,6 @@
 package builder.extraction
 
+import builder.domain.Leistung
 import cats.effect.IO
 import cats.effect.Resource
 import cats.effect.std.Random
@@ -74,7 +75,11 @@ final class ClaudeOfferExtractor(
 ) extends OfferExtractor[IO]:
   import ClaudeOfferExtractor.*
 
-  def extract(file: Array[Byte], fileType: OfferFileType): IO[Either[ExtractionError, RawOffer]] =
+  def extract(
+      file: Array[Byte],
+      fileType: OfferFileType,
+      known: List[Leistung]
+  ): IO[Either[ExtractionError, RawOffer]] =
     key match
       case None    => IO.pure(Left(ExtractionError.MissingApiKey))
       case Some(k) =>
@@ -86,7 +91,7 @@ final class ClaudeOfferExtractor(
               `Content-Type`(MediaType.application.json)
             )
           )
-          .withEntity(requestBody(model, file, fileType).noSpaces)
+          .withEntity(requestBody(model, file, fileType, known).noSpaces)
         Random
           .scalaUtilRandom[IO]
           .flatMap(random => withRetries(req, random, 0))
@@ -178,7 +183,22 @@ object ClaudeOfferExtractor:
       |- confidence: "high" wenn eindeutig lesbar und eindeutig zugeordnet; "medium" bei kleinen Unsicherheiten; "low" wenn schlecht lesbar, mehrdeutig, nur indirekt erschlossen oder wenn du den Wert doch berechnen musstest.
       |- lineItems: jede bepreiste Position einzeln (auch Rabatte als negative Positionen). Alternativ- und Eventualpositionen ohne Einrechnung in die Summe NICHT als lineItem, sondern in notes.
       |- unit z. B. "Stk", "m²", "m", "psch"; sizes z. B. "78 x 140 cm"; manufacturer und model nur wenn genannt.
-      |- notes: Hinweise, Zahlungsbedingungen, Bindefristen, Alternativen. exclusions: ausdrücklich nicht enthaltene Leistungen.""".stripMargin
+      |- notes: Hinweise, Zahlungsbedingungen, Bindefristen, Alternativen. exclusions: ausdrücklich nicht enthaltene Leistungen.
+      |
+      |Leistungen (Vergleich mehrerer Angebote derselben Kategorie):
+      |- Eine Leistung ist ein GROBER Arbeitsschritt bzw. eine Leistungsgruppe, wie ein Handwerker sie auf der Baustelle benennen würde, z. B. bei einem Dach: "Gerüst", "Abdecken", "Dämmen", "Neu decken", "Spenglerarbeiten", "Entsorgung"; bei Dachfenstern: "Fenster inkl. Zubehör", "Einbau", "Innenausbau", "Entsorgung". Pro Kategorie sind es typischerweise nur 4 bis 8 Leistungen.
+      |- NICHT jede Position ist eine eigene Leistung: Material, Zubehör und Kleinteile gehören zu dem Arbeitsschritt, zu dem sie verbaut werden.
+      |- Ordne jede Position (lineItems[].leistung) einer vorhandenen Leistung zu (deren id). Bevorzuge immer eine vorhandene Leistung, auch wenn sie etwas allgemeiner ist.
+      |- Nur wenn eine Position zu keiner vorhandenen Leistung passt, schlage in neueLeistungen eine neue grobe Leistung vor (key z. B. "neu-1", kurzer deutscher name) und verwende den key. Lege nie zwei neue Leistungen für denselben Arbeitsschritt an.
+      |- abdeckung: für JEDE vorhandene und jede neue Leistung genau ein Eintrag: status "enthalten" (Positionen dafür vorhanden), "ausgeschlossen" (ausdrücklich als nicht enthalten genannt), "nicht_enthalten" (eindeutig nicht angeboten, z. B. Angebot listet vollständig andere Leistungen) oder "unklar" (nicht sicher erkennbar). Im Zweifel "unklar" – nicht raten. page = Seite des Belegs (0 wenn keiner), confidence wie oben.""".stripMargin
+
+  /** The category's existing Leistungen as prompt text. */
+  def knownText(known: List[Leistung]): String =
+    if known.isEmpty then
+      "Vorhandene Leistungen dieser Kategorie: keine – schlage die passenden groben Leistungen neu vor."
+    else
+      "Vorhandene Leistungen dieser Kategorie (id: Name):\n" +
+        known.map(l => s"- ${l.id.value}: ${l.name.value}").mkString("\n")
 
   /** Shared via `$defs`: inlining it 17 times makes the compiled grammar too large. */
   private val fieldDef: Json = Json.obj(
@@ -223,12 +243,39 @@ object ClaudeOfferExtractor:
               "model",
               "unitPrice",
               "total"
-            )
+            ) :+ ("leistung" -> Json.obj("type" -> "string".asJson))
           )
         )
       ) ++
       fields("net", "vatRate", "vat", "gross") ++
-      List("notes" -> arrayOf(field), "exclusions" -> arrayOf(field))
+      List(
+        "notes" -> arrayOf(field),
+        "exclusions" -> arrayOf(field),
+        "neueLeistungen" -> arrayOf(
+          obj(
+            List(
+              "key" -> Json.obj("type" -> "string".asJson),
+              "name" -> Json.obj("type" -> "string".asJson)
+            )
+          )
+        ),
+        "abdeckung" -> arrayOf(
+          obj(
+            List(
+              "leistung" -> Json.obj("type" -> "string".asJson),
+              "status" -> Json.obj(
+                "type" -> "string".asJson,
+                "enum" -> List("enthalten", "nicht_enthalten", "ausgeschlossen", "unklar").asJson
+              ),
+              "page" -> Json.obj("type" -> "integer".asJson),
+              "confidence" -> Json.obj(
+                "type" -> "string".asJson,
+                "enum" -> List("high", "medium", "low").asJson
+              )
+            )
+          )
+        )
+      )
   ).deepMerge(Json.obj("$defs" -> Json.obj("feld" -> fieldDef)))
 
   private def fileBlock(file: Array[Byte], fileType: OfferFileType): Json =
@@ -242,7 +289,12 @@ object ClaudeOfferExtractor:
       case OfferFileType.Jpeg | OfferFileType.Png =>
         Json.obj("type" -> "image".asJson, "source" -> source)
 
-  def requestBody(model: String, file: Array[Byte], fileType: OfferFileType): Json = Json.obj(
+  def requestBody(
+      model: String,
+      file: Array[Byte],
+      fileType: OfferFileType,
+      known: List[Leistung]
+  ): Json = Json.obj(
     "model" -> model.asJson,
     "max_tokens" -> 16000.asJson,
     "output_config" -> Json.obj(
@@ -253,7 +305,7 @@ object ClaudeOfferExtractor:
         "role" -> "user".asJson,
         "content" -> List(
           fileBlock(file, fileType),
-          Json.obj("type" -> "text".asJson, "text" -> prompt.asJson)
+          Json.obj("type" -> "text".asJson, "text" -> s"$prompt\n\n${knownText(known)}".asJson)
         ).asJson
       )
     ).asJson

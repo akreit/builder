@@ -1,5 +1,6 @@
 package builder.extraction
 
+import builder.domain.Leistung
 import cats.effect.IO
 import cats.effect.std.Semaphore
 
@@ -43,15 +44,21 @@ enum ExtractionError:
   /** No answer within the overall time limit (all attempts together). */
   case TimedOut
 
-/** Reads the contents of an offer document. */
+/** Reads the contents of an offer document, mapping its line items onto the category's `known`
+  * Leistungen (or proposing new coarse ones) in the same pass.
+  */
 trait OfferExtractor[F[_]]:
-  def extract(file: Array[Byte], fileType: OfferFileType): F[Either[ExtractionError, RawOffer]]
+  def extract(
+      file: Array[Byte],
+      fileType: OfferFileType,
+      known: List[Leistung]
+  ): F[Either[ExtractionError, RawOffer]]
 
 object OfferExtractor:
   /** At most `permits` extractions run at the same time; further callers wait for a slot. */
   def bounded(underlying: OfferExtractor[IO], permits: Int): IO[OfferExtractor[IO]] =
     Semaphore[IO](permits.toLong).map(slots =>
       new OfferExtractor[IO]:
-        def extract(file: Array[Byte], fileType: OfferFileType) =
-          slots.permit.surround(underlying.extract(file, fileType))
+        def extract(file: Array[Byte], fileType: OfferFileType, known: List[Leistung]) =
+          slots.permit.surround(underlying.extract(file, fileType, known))
     )

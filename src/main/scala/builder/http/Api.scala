@@ -10,6 +10,7 @@ import cats.effect.Clock
 import cats.effect.IO
 import cats.effect.Outcome
 import cats.effect.std.UUIDGen
+import cats.syntax.all.*
 import io.circe.Codec
 import org.http4s.HttpRoutes
 import sttp.model.Part
@@ -156,7 +157,7 @@ object Endpoints:
     statusCode.and(htmlBodyUtf8).mapTo[HtmlError]
 
   /** Endpoints whose decode failures are rendered as htmx error fragments. */
-  val htmxNames: Set[String] = Set("upload-offer", "mark-favorite")
+  val htmxNames: Set[String] = Set("upload-offer", "mark-favorite", "edit")
 
   /** Projektübersicht of the home project. */
   val overviewPage =
@@ -205,7 +206,63 @@ object Endpoints:
       .out(htmlBodyUtf8)
       .errorOut(fragmentError)
 
+  /** htmx form post: one manual change to categories, Leistungen, assignments or coverage (field
+    * `aktion`, see [[Api.parseEdit]]); returns the re-rendered overview fragment.
+    */
+  val edit =
+    endpoint.post
+      .name("edit")
+      .in("ui" / "projects" / path[String]("projectId") / "aenderungen")
+      .securityIn(htmxHeaders)
+      .in(formBody[Map[String, String]])
+      .out(htmlBodyUtf8)
+      .errorOut(fragmentError)
+      .maxRequestBodyLength(Api.MaxEditBytes)
+
 object Api:
+  /** Edit forms carry a handful of short fields; anything larger is rejected (413). */
+  val MaxEditBytes: Long = 16L * 1024
+
+  /** Reads a form of the edit endpoint. Fields: `aktion` plus, depending on it, `kategorie`,
+    * `leistung`, `ziel` (target Leistung, empty for none), `angebot`, `position` (1-based),
+    * `status` (a coverage code or `auto`) and `name`.
+    */
+  def parseEdit(form: Map[String, String]): Either[String, Edit] =
+    def field(k: String): Either[String, String] =
+      form.get(k).map(_.trim).filter(_.nonEmpty).toRight(s"Feld '$k' fehlt")
+    def domain[A](e: Either[DomainError, A]): Either[String, A] = e.left.map(Pages.describe)
+    def category = field("kategorie").flatMap(c => domain(CategoryId.from(c)))
+    def categoryName = field("name").flatMap(n => domain(CategoryName.from(n)))
+    def leistung(k: String) = field(k).flatMap(l => domain(LeistungId.from(l)))
+    def leistungName = field("name").flatMap(n => domain(LeistungName.from(n)))
+    def offer = field("angebot").flatMap(o => domain(OfferId.from(o)))
+    def position = field("position").flatMap(
+      _.toIntOption.filter(_ >= 1).map(_ - 1).toRight("Ungültige Position")
+    )
+    field("aktion").flatMap {
+      case "kategorie-neu"        => categoryName.map(Edit.AddCategory(_))
+      case "kategorie-umbenennen" => (category, categoryName).mapN(Edit.RenameCategory(_, _))
+      case "kategorie-loeschen"   => category.map(Edit.DeleteCategory(_))
+      case "leistung-neu"         => (category, leistungName).mapN(Edit.AddLeistung(_, _))
+      case "leistung-umbenennen"  =>
+        (leistung("leistung"), leistungName).mapN(Edit.RenameLeistung(_, _))
+      case "leistung-zusammenfuehren" =>
+        (leistung("leistung"), leistung("ziel")).mapN(Edit.MergeLeistung(_, _))
+      case "leistung-loeschen" => leistung("leistung").map(Edit.DeleteLeistung(_))
+      case "position-zuordnen" =>
+        val target = form.get("ziel").map(_.trim).filter(_.nonEmpty) match
+          case Some(l) => domain(LeistungId.from(l)).map(Some(_))
+          case None    => Right(None)
+        (offer, position, target).mapN(Edit.AssignItem(_, _, _))
+      case "status-setzen" =>
+        val status = field("status").flatMap {
+          case "auto" => Right(None)
+          case code   => Coverage.fromCode(code).map(Some(_)).toRight(s"Unbekannter Status: $code")
+        }
+        (offer, leistung("leistung"), status).mapN(Edit.SetCoverage(_, _, _))
+      case other => Left(s"Unbekannte Aktion: $other")
+    }
+
   /** Largest file (PDF, 20 MB) plus room for the multipart framing; larger bodies get 413 without
     * being read.
     */
@@ -227,7 +284,8 @@ final class Api(
             _.map(v => TotalsResponse.from(Totals.compute(v.project))).left.map {
               case RepoError.Storage(code) => ApiError.StorageFailed(code)
               case RepoError.ProjectNotFound(_) | RepoError.CategoryNotFound(_) |
-                  RepoError.OfferNotFound(_) | RepoError.Invalid(_) =>
+                  RepoError.OfferNotFound(_) | RepoError.LeistungNotFound(_) |
+                  RepoError.ItemNotFound(_, _) | RepoError.Invalid(_) | RepoError.Rejected(_) =>
                 ApiError.ProjectNotFound(raw)
             }
           )
@@ -245,7 +303,8 @@ final class Api(
             Pages.message(s"Datenbankfehler (Code $code)").render
           )
         case RepoError.ProjectNotFound(_) | RepoError.CategoryNotFound(_) |
-            RepoError.OfferNotFound(_) | RepoError.Invalid(_) =>
+            RepoError.OfferNotFound(_) | RepoError.LeistungNotFound(_) |
+            RepoError.ItemNotFound(_, _) | RepoError.Invalid(_) | RepoError.Rejected(_) =>
           notFound("Projekt")
       })
 
@@ -287,10 +346,25 @@ final class Api(
       fragmentError(StatusCode.NotFound, s"Kategorie nicht gefunden: ${c.value}")
     case RepoError.OfferNotFound(o) =>
       fragmentError(StatusCode.NotFound, s"Angebot nicht gefunden: ${o.value}")
+    case RepoError.LeistungNotFound(l) =>
+      fragmentError(StatusCode.NotFound, s"Leistung nicht gefunden: ${l.value}")
+    case RepoError.ItemNotFound(_, item) =>
+      fragmentError(StatusCode.UnprocessableEntity, s"Position ${item + 1} gibt es nicht")
     case RepoError.Invalid(e) =>
       fragmentError(StatusCode.UnprocessableEntity, Pages.describe(e))
+    case RepoError.Rejected(reason) =>
+      fragmentError(StatusCode.Conflict, reason)
     case RepoError.Storage(code) =>
       fragmentError(StatusCode.InternalServerError, s"Datenbankfehler (Code $code)")
+
+  private def editLogic(
+      projectId: String,
+      form: Map[String, String]
+  ): IO[Either[HtmlError, String]] =
+    (ProjectId.from(projectId).left.map(Pages.describe), Api.parseEdit(form)).tupled match
+      case Left(text)    => IO.pure(Left(fragmentError(StatusCode.BadRequest, text)))
+      case Right((p, e)) =>
+        repo.edit(p, e).map(_.map(Pages.projectFragment(_).render).left.map(repoError))
 
   private def newOfferId: IO[Either[DomainError, OfferId]] =
     UUIDGen[IO].randomUUID.map(u => OfferId.from(s"upl-${u.toString.replace("-", "").take(12)}"))
@@ -331,7 +405,8 @@ final class Api(
           case Left(e)                                             => IO.pure(Left(repoError(e)))
           case Right(v) if !v.project.categories.exists(_.id == c) =>
             IO.pure(Left(repoError(RepoError.CategoryNotFound(c))))
-          case Right(_) =>
+          case Right(v) =>
+            val known = v.leistungen.filter(_.category == c)
             newOfferId.flatMap {
               case Left(e) =>
                 IO.pure(Left(fragmentError(StatusCode.InternalServerError, Pages.describe(e))))
@@ -339,7 +414,7 @@ final class Api(
                 val name = fileName.getOrElse(s"angebot.${fileType.extension}")
                 val upload = files.save(id, fileType, bytes) >>
                   extractor
-                    .extract(bytes, fileType)
+                    .extract(bytes, fileType, known)
                     .flatMap(extracted =>
                       Clock[IO].realTimeInstant.map(now =>
                         Upload(
@@ -409,6 +484,9 @@ final class Api(
       Endpoints.markFavorite
         .serverSecurityLogic[Unit, IO](checkRequest)
         .serverLogic(_ => favoriteLogic.tupled),
+      Endpoints.edit
+        .serverSecurityLogic[Unit, IO](checkRequest)
+        .serverLogic(_ => editLogic.tupled),
       Endpoints.uploadOffer
         .serverSecurityLogic[Unit, IO](checkRequest)
         .serverLogic(_ => uploadLogic.tupled)

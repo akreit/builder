@@ -32,7 +32,11 @@ object Pages:
       |.unsicher{background:#fff3cd}.flag{font-size:.8rem;padding:0 .3rem;border-radius:3px;white-space:nowrap}
       |.flag.niedrig{background:#f0ad4e;color:#000}.flag.mittel{background:#eee}.seite{color:#666;font-size:.8rem;white-space:nowrap}
       |.warnung{background:#fff3cd;padding:.5rem 1rem;border-radius:6px}.abweichung{background:#f5d0d0;padding:.5rem 1rem;border-radius:6px}
-      |table.felder th{width:10rem}form.hochladen{margin:.5rem 0}.htmx-indicator{display:none}.htmx-request .htmx-indicator,.htmx-request.htmx-indicator{display:inline}""".stripMargin
+      |table.felder th{width:10rem}form.hochladen{margin:.5rem 0}.htmx-indicator{display:none}.htmx-request .htmx-indicator,.htmx-request.htmx-indicator{display:inline}
+      |table.matrix td,table.matrix th{vertical-align:top;border:1px solid #e3e3e3}table.matrix th.leistung{min-width:9rem}
+      |.st-enthalten{background:#e3f4e3}.st-nicht{background:#f3f3f3}.st-ausgeschlossen{background:#f8dede}.st-unklar{background:#fff3cd}
+      |td.pruefen,div.pruefen{outline:2px solid #f0ad4e;outline-offset:-2px}form.aendern{display:inline-block;margin:.15rem .25rem .15rem 0}
+      |table.matrix select{font-size:.8rem}details summary{cursor:pointer}section.leistungen{margin-top:1rem}""".stripMargin
 
   private def statusBadge(s: CategoryStatus): Frag = s match
     case CategoryStatus.Counted(_, _, _, _, CountedReason.Favorite) =>
@@ -214,12 +218,281 @@ object Pages:
       )
     )
 
+  private val hxTrigger = attr("hx-trigger")
+  private val hxConfirm = attr("hx-confirm")
+
+  private def coverageLabel(c: Coverage): String = c match
+    case Coverage.Enthalten      => "enthalten"
+    case Coverage.NichtEnthalten => "nicht enthalten"
+    case Coverage.Ausgeschlossen => "ausgeschlossen"
+    case Coverage.Unklar         => "unklar"
+
+  private def coverageClass(c: Coverage): String = c match
+    case Coverage.Enthalten      => "st-enthalten"
+    case Coverage.NichtEnthalten => "st-nicht"
+    case Coverage.Ausgeschlossen => "st-ausgeschlossen"
+    case Coverage.Unklar         => "st-unklar"
+
+  private def sourceText(s: CoverageSource): String = s match
+    case CoverageSource.Read(page, conf) =>
+      page.fold("ohne Seite")(p => s"S. ${p.value}") + (conf match
+        case Confidence.High   => ""
+        case Confidence.Medium => " · mittel sicher"
+        case Confidence.Low    => " · unsicher")
+    case CoverageSource.FromItems => "aus Positionen"
+    case CoverageSource.Manual    => "manuell"
+    case CoverageSource.Unknown   => "nicht erkannt"
+
+  /** A form posting one [[Edit]]; `auto` forms submit on every change of a select. */
+  private def editForm(project: Project, fields: List[(String, String)], auto: Boolean)(
+      content: Frag*
+  ): Frag =
+    form(
+      cls := "aendern",
+      hxPost := s"/ui/projects/${project.id.value}/aenderungen",
+      hxTarget := "#projekt",
+      hxSwap := "outerHTML",
+      if auto then hxTrigger := "change" else frag()
+    )(fields.map((k, v) => input(tpe := "hidden", name := k, value := v)), frag(content*))
+
+  private def columnTitle(c: MatrixColumn): String =
+    c.raw.contractor.value.filter(_.trim.nonEmpty).getOrElse(c.upload.upload.fileName)
+
+  private def matrixCell(project: Project, col: MatrixColumn, l: Leistung, c: Cell): Frag =
+    val chosen = c.source match
+      case CoverageSource.Manual => Coverage.code(c.coverage)
+      case CoverageSource.Read(_, _) | CoverageSource.FromItems | CoverageSource.Unknown => "auto"
+    td(
+      cls := s"zelle ${coverageClass(c.coverage)}${if c.flagged then " pruefen" else ""}",
+      attr("data-zelle") := s"${l.id.value}|${col.upload.upload.id.value}",
+      attr("data-status") := Coverage.code(c.coverage)
+    )(
+      div(
+        strong(coverageLabel(c.coverage)),
+        if c.flagged then span(cls := "flag niedrig")("prüfen") else frag()
+      ),
+      div(cls := "betrag")(c.price.fold(if c.items.nonEmpty then "Preis ?" else "–")(Format.money)),
+      div(cls := "seite")(
+        sourceText(c.source) + (if c.items.isEmpty then ""
+                                else s" · Pos. ${c.items.map(_ + 1).mkString(", ")}")
+      ),
+      editForm(
+        project,
+        List(
+          "aktion" -> "status-setzen",
+          "angebot" -> col.upload.upload.id.value,
+          "leistung" -> l.id.value
+        ),
+        auto = true
+      )(
+        select(
+          name := "status",
+          attr("aria-label") := s"Status ${l.name.value} für ${columnTitle(col)}"
+        )(
+          (("auto" -> "automatisch") :: Coverage.values.toList.map(c =>
+            Coverage.code(c) -> coverageLabel(c)
+          ))
+            .map((v, t) =>
+              option(value := v, if v == chosen then selected := "selected" else frag())(t)
+            )
+        )
+      )
+    )
+
+  private def leistungHeader(project: Project, l: Leistung, others: List[Leistung]): Frag =
+    th(cls := "leistung", attr("data-leistung") := l.id.value)(
+      l.name.value,
+      tag("details")(
+        tag("summary")(cls := "hinweis")("bearbeiten"),
+        editForm(
+          project,
+          List("aktion" -> "leistung-umbenennen", "leistung" -> l.id.value),
+          auto = false
+        )(
+          input(name := "name", value := l.name.value, attr("aria-label") := "Neuer Name"),
+          button(tpe := "submit")("Umbenennen")
+        ),
+        if others.isEmpty then frag()
+        else
+          editForm(
+            project,
+            List("aktion" -> "leistung-zusammenfuehren", "leistung" -> l.id.value),
+            auto = false
+          )(
+            select(name := "ziel", attr("aria-label") := "Zusammenführen mit")(
+              others.map(o => option(value := o.id.value)(o.name.value))
+            ),
+            button(tpe := "submit")("Zusammenführen")
+          )
+        ,
+        editForm(
+          project,
+          List("aktion" -> "leistung-loeschen", "leistung" -> l.id.value),
+          auto = false
+        )(
+          button(tpe := "submit", hxConfirm := s"Leistung „${l.name.value}“ löschen?")("Löschen")
+        )
+      )
+    )
+
+  private def leistungenSection(view: ProjectView, category: Category): Frag =
+    val project = view.project
+    val m = Matrix.build(view, category.id)
+    val leistungen = m.rows.map(_.leistung)
+    tags2.section(cls := "leistungen", attr("data-kategorie") := category.id.value)(
+      h3("Leistungsvergleich"),
+      if m.rows.isEmpty && m.columns.isEmpty then
+        p(cls := "hinweis")(
+          "Noch keine Leistungen – sie werden beim ersten hochgeladenen Angebot erkannt."
+        )
+      else
+        table(cls := "matrix")(
+          thead(tr(th("Leistung"), m.columns.map(c => th(columnTitle(c))))),
+          tbody(
+            m.rows.map(r =>
+              tr(
+                leistungHeader(project, r.leistung, leistungen.filterNot(_.id == r.leistung.id)),
+                m.columns.zip(r.cells).map((col, c) => matrixCell(project, col, r.leistung, c))
+              )
+            ),
+            if m.unassigned.isEmpty then frag()
+            else
+              tr(cls := "nicht-zugeordnet")(
+                th("Nicht zugeordnet"),
+                m.columns.map(col =>
+                  td(
+                    m.unassigned
+                      .filter(_.offer == col.upload.upload.id)
+                      .map(u => div(cls := "pruefen")(s"Pos. ${u.item + 1}: ${u.description}"))
+                  )
+                )
+              )
+          ),
+          tfoot(
+            tr(cls := "summen")(
+              th("Summe Zellen + nicht zugeordnet"),
+              m.totals.map(t =>
+                td(
+                  cls := (if t.mismatch then "betrag pruefen" else "betrag"),
+                  attr("data-abweichung") := t.mismatch.toString
+                )(
+                  t.sum.map(Format.money).getOrElse("nicht lesbar"),
+                  div(cls := "hinweis")(
+                    s"Netto laut Angebot: ${t.net.map(Format.money).getOrElse("nicht lesbar")}"
+                  ),
+                  if t.mismatch then div("Weicht vom Netto ab – Zuordnung prüfen") else frag()
+                )
+              )
+            )
+          )
+        )
+      ,
+      m.columns.zip(m.dropped).collect {
+        case (col, n) if n > 0 =>
+          p(cls := "pruefen verworfen")(
+            s"${columnTitle(col)}: $n weitere Leistungsvorschläge verworfen " +
+              s"(höchstens ${LeistungPlan.MaxNew} neue je Angebot)."
+          )
+      },
+      if m.columns.isEmpty then frag()
+      else
+        tag("details")(cls := "zuordnung")(
+          tag("summary")("Positionen zuordnen"),
+          m.columns.map { col =>
+            val assigned = Matrix.effective(view.assignments)
+            div(
+              h4(columnTitle(col)),
+              table(
+                col.raw.lineItems.zipWithIndex.map((li, i) =>
+                  val current = assigned.get((col.upload.upload.id, i)).flatten
+                  tr(
+                    td(s"${i + 1}. ${li.description.value.getOrElse("")}"),
+                    td(cls := "betrag")(li.total.value.getOrElse("")),
+                    td(
+                      editForm(
+                        project,
+                        List(
+                          "aktion" -> "position-zuordnen",
+                          "angebot" -> col.upload.upload.id.value,
+                          "position" -> (i + 1).toString
+                        ),
+                        auto = true
+                      )(
+                        select(
+                          name := "ziel",
+                          attr("aria-label") := s"Leistung für Position ${i + 1}"
+                        )(
+                          option(
+                            value := "",
+                            if current.isEmpty then selected := "selected" else frag()
+                          )(
+                            "– keine –"
+                          ),
+                          leistungen.map(l =>
+                            option(
+                              value := l.id.value,
+                              if current.contains(l.id) then selected := "selected" else frag()
+                            )(
+                              l.name.value
+                            )
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          }
+        )
+      ,
+      editForm(
+        project,
+        List("aktion" -> "leistung-neu", "kategorie" -> category.id.value),
+        auto = false
+      )(
+        input(
+          name := "name",
+          placeholder := "Neue Leistung",
+          attr("aria-label") := "Neue Leistung"
+        ),
+        button(tpe := "submit")("Leistung hinzufügen")
+      )
+    )
+
+  private def categoryEdit(project: Project, category: Category): Frag =
+    tag("details")(cls := "kategorie-bearbeiten")(
+      tag("summary")(cls := "hinweis")("Kategorie bearbeiten"),
+      editForm(
+        project,
+        List("aktion" -> "kategorie-umbenennen", "kategorie" -> category.id.value),
+        auto = false
+      )(
+        input(
+          name := "name",
+          value := category.name.value,
+          attr("aria-label") := "Neuer Kategoriename"
+        ),
+        button(tpe := "submit")("Umbenennen")
+      ),
+      editForm(
+        project,
+        List("aktion" -> "kategorie-loeschen", "kategorie" -> category.id.value),
+        auto = false
+      )(
+        button(tpe := "submit", hxConfirm := s"Kategorie „${category.name.value}“ löschen?")(
+          "Löschen"
+        )
+      )
+    )
+
   private def categorySection(view: ProjectView, ct: CategoryTotal): Frag =
     val project = view.project
     val uploads = view.uploads.filter(_.upload.category == ct.category.id)
     val offers = project.offers.filter(_.category == ct.category.id)
     tags2.section(cls := "kategorie", attr("data-kategorie") := ct.category.id.value)(
       h2(ct.category.name.value, statusBadge(ct.status)),
+      categoryEdit(project, ct.category),
       if offers.isEmpty then p(cls := "hinweis")("Noch kein Angebot eingegangen.")
       else
         table(
@@ -236,6 +509,7 @@ object Pages:
         )
       ,
       uploads.map(uploadBlock(_, project.currency)),
+      leistungenSection(view, ct.category),
       uploadForm(project, ct.category)
     )
 
@@ -251,6 +525,14 @@ object Pages:
         )
       ,
       totals.categories.map(ct => categorySection(view, ct)),
+      editForm(view.project, List("aktion" -> "kategorie-neu"), auto = false)(
+        input(
+          name := "name",
+          placeholder := "Neue Kategorie",
+          attr("aria-label") := "Neue Kategorie"
+        ),
+        button(tpe := "submit")("Kategorie hinzufügen")
+      ),
       tags2.section(cls := "summe", id := "summe")(
         h2("Gesamtsumme"),
         table(
@@ -327,6 +609,7 @@ object Pages:
       s"Summe der Positionen ${Format.money(sum)} ≠ Netto ${Format.money(net)}"
     case DomainError.DuplicateOfferId(o)             => s"Angebot doppelt vorhanden: $o"
     case DomainError.InvalidCategoryName(raw)        => s"Ungültiger Kategoriename: '$raw'"
+    case DomainError.InvalidLeistungName(raw)        => s"Ungültiger Name der Leistung: '$raw'"
     case DomainError.DuplicateCategoryId(c)          => s"Kategorie doppelt vorhanden: $c"
     case DomainError.UnknownCategory(by, c)          => s"Unbekannte Kategorie '$c' ($by)"
     case DomainError.LineItemTotalMismatch(exp, act) =>

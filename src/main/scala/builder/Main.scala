@@ -36,7 +36,16 @@ object Main extends IOApp.Simple:
           SampleData.project.left.map(e => IllegalStateException(s"Invalid sample data: $e"))
         )
       )
-      repo <- SqliteProjectRepository.resource(dataDir.resolve("builder.db"), List(project))
+      leistungen <- cats.effect.Resource.eval(
+        IO.fromEither(
+          SampleData.leistungen.left.map(e => IllegalStateException(s"Invalid sample data: $e"))
+        )
+      )
+      repo <- SqliteProjectRepository.resource(
+        dataDir.resolve("builder.db"),
+        List(project),
+        leistungen
+      )
       claude <- ClaudeOfferExtractor.resource(ApiKey.fromEnv, model)
       extractor <- cats.effect.Resource.eval(OfferExtractor.bounded(claude, permits = 2))
       server <- EmberServerBuilder
