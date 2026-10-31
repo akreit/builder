@@ -26,4 +26,7 @@ object Format:
 
   private val dateFormat = DateTimeFormatter.ofPattern("dd.MM.yyyy")
 
+  /** Score with one decimal, German style ("87,5"). */
+  def decimal(d: BigDecimal): String = pattern(1).format(d.bigDecimal)
+
   def date(d: LocalDate): String = dateFormat.format(d)

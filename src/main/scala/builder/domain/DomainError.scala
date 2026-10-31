@@ -15,6 +15,8 @@ enum DomainError:
   case DuplicateOfferId(offerId: String)
   case InvalidCategoryName(raw: String)
   case InvalidLeistungName(raw: String)
+  case InvalidStars(value: Int)
+  case InvalidWeights(weights: Map[String, Int])
   case DuplicateCategoryId(categoryId: String)
 
   /** A work package, offer or favorite references a category the project does not have. */
