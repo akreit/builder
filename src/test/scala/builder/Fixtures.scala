@@ -100,3 +100,46 @@ object Fixtures extends EitherValues:
   ): Project = projectE(wps, offers, favorites, id, categories).value
 
   def eur(cents: Long): Money = Money.ofMinor(cents, Currency.EUR)
+
+/** Builders for extractor output and a fake [[builder.extraction.OfferExtractor]]. */
+object RawOffers:
+  import builder.extraction.*
+  import cats.effect.IO
+
+  def f(value: String, page: Int = 1, c: Confidence = Confidence.High): Field =
+    Field(Some(value), Some(page), c)
+  val absent: Field = Field(None, None, Confidence.High)
+
+  def item(desc: String, qty: String, unit: String, price: String, total: String): RawLineItem =
+    RawLineItem(f(desc, 2), f(qty, 2), f(unit, 2), absent, absent, absent, f(price, 2), f(total, 2))
+
+  /** Fictional Dachfenster offer: 3 × 1.250,00 + 3 × 420,00 = 5.010,00 net, 19 % VAT. */
+  val dachfenster: RawOffer = RawOffer(
+    contractor = f("Zimmerei Erfunden GmbH"),
+    date = f("2026-10-12"),
+    validUntil = f("2026-12-31", c = Confidence.Medium),
+    lineItems = List(
+      item("Dachfenster liefern", "3", "Stk", "1250.00", "3750.00")
+        .copy(model = f("GGU 0070", 2, Confidence.Low), sizes = f("78 x 140 cm", 2)),
+      item("Einbau inkl. Eindeckrahmen", "3", "Stk", "420.00", "1260.00")
+    ),
+    net = f("5010.00", 3),
+    vatRate = f("19", 3),
+    vat = f("951.90", 3),
+    gross = f("5961.90", 3),
+    notes = List(f("Bindefrist 6 Wochen", 3)),
+    exclusions = List(f("Innenfutter", 3))
+  )
+
+  /** Returns `result` for every file and remembers how often it was called. */
+  final class FakeExtractor(result: Either[ExtractionError, RawOffer]) extends OfferExtractor[IO]:
+    def extract(file: Array[Byte], fileType: OfferFileType): IO[Either[ExtractionError, RawOffer]] =
+      IO.pure(result)
+
+  /** Like [[FakeExtractor]], and counts its calls. */
+  final class CountingExtractor(result: Either[ExtractionError, RawOffer])
+      extends OfferExtractor[IO]:
+    private val ref = cats.effect.Ref.unsafe[IO, Int](0)
+    def calls: IO[Int] = ref.get
+    def extract(file: Array[Byte], fileType: OfferFileType): IO[Either[ExtractionError, RawOffer]] =
+      ref.update(_ + 1).as(result)
