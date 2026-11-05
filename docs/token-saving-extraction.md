@@ -112,6 +112,20 @@ dürfen die bestehenden Grenzen aber nicht erhöhen. Budgetüberschreitung führ
 zum Fehler, nicht zu stiller Kürzung. Das bisherige Verhalten bleibt bis zur
 späteren, separat freigegebenen Integration unangetastet.
 
+### Semaphore-/Permit-Abrechnung
+
+Die bestehende App-`Semaphore` zählt nach #17 einzelne Claude-API-**Aufrufe**,
+nicht Chunks. Mit Verdichtung entstehen pro Chunk zwei Aufrufe
+(compress + strong extract). Empfohlenes Design: **ein gemeinsamer Pool**
+(bestehende Größe 2, keine separaten Pools), wobei **jeder Aufruf sein eigenes
+Permit erwirbt und direkt nach der Antwort freigibt**. Ein Chunk hält also nie
+zwei Permits gleichzeitig und kein Permit über die Pause zwischen compress und
+strong extract. So bleibt die globale Obergrenze gleichzeitiger Aufrufe
+unverändert, es gibt keine Doppelbuchung von Nebenläufigkeit, und compress +
+strong eines Chunks können andere Chunks weder blockieren noch aushungern.
+Separate Pools werden bewusst nicht empfohlen, da sie die effektive
+Gesamtnebenläufigkeit verdoppeln würden.
+
 ## Nicht im Umfang
 
 - OCR/Scans und Änderungen am Bildpfad.
