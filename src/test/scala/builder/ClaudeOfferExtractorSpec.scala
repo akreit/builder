@@ -23,11 +23,13 @@ import java.util.concurrent.TimeoutException
 import scala.concurrent.duration.*
 
 class ClaudeOfferExtractorSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
+  private val prompts = ExtractionPrompts("test prompt", "empty", "known:\n")
+
   private val pdf = "%PDF-1.7".getBytes("UTF-8")
 
   private def contentTypes(fileType: OfferFileType): List[String] =
     ClaudeOfferExtractor
-      .requestBody("claude-sonnet-5-5", pdf, fileType, Nil)
+      .requestBody("claude-sonnet-5-5", pdf, fileType, Nil, prompts)
       .hcursor
       .downField("messages")
       .downArray
@@ -44,19 +46,21 @@ class ClaudeOfferExtractorSpec extends AsyncFreeSpec with AsyncIOSpec with Match
 
   "the category's existing Leistungen are sent with the prompt, so items map onto them" in {
     val known = SampleData.leistungen.toOption.toList.flatten.map(_._2)
-    val text = ClaudeOfferExtractor
-      .requestBody("claude-sonnet-5-5", pdf, OfferFileType.Pdf, known)
-      .hcursor
-      .downField("messages")
-      .downArray
-      .downField("content")
-      .downN(1)
-      .downField("text")
-      .as[String]
-      .getOrElse("")
-    text should include("dachfenster-einbau: Einbau")
-    text should include("Fenster inkl. Zubehör")
-    text should include("Bevorzuge immer eine vorhandene Leistung")
+    ExtractionPrompts.load.flatMap(IO.fromEither).asserting { loaded =>
+      val text = ClaudeOfferExtractor
+        .requestBody("claude-sonnet-5-5", pdf, OfferFileType.Pdf, known, loaded)
+        .hcursor
+        .downField("messages")
+        .downArray
+        .downField("content")
+        .downN(1)
+        .downField("text")
+        .as[String]
+        .getOrElse("")
+      text should include("dachfenster-einbau: Einbau")
+      text should include("Fenster inkl. Zubehör")
+      text should include("Bevorzuge immer eine vorhandene Leistung")
+    }
   }
 
   "the structured JSON answer of a Messages API response is read as the offer" in {
@@ -85,7 +89,7 @@ class ClaudeOfferExtractorSpec extends AsyncFreeSpec with AsyncIOSpec with Match
   "without an API key nothing is sent" in {
     val noNetwork =
       Client[IO](_ => cats.effect.Resource.eval(IO.raiseError(IllegalStateException("network"))))
-    ClaudeOfferExtractor(noNetwork, None, "m")
+    ClaudeOfferExtractor(noNetwork, None, "m", prompts)
       .extract(pdf, OfferFileType.Pdf, Nil)
       .asserting(_ shouldBe Left(ExtractionError.MissingApiKey))
   }
@@ -137,7 +141,7 @@ class ClaudeOfferExtractorSpec extends AsyncFreeSpec with AsyncIOSpec with Match
       for
         calls <- Ref.of[IO, Int](0)
         start <- IO.monotonic
-        result <- ClaudeOfferExtractor(scripted(calls, answers), testKey, "m")
+        result <- ClaudeOfferExtractor(scripted(calls, answers), testKey, "m", prompts)
           .extract(pdf, OfferFileType.Pdf, Nil)
         end <- IO.monotonic
         n <- calls.get
