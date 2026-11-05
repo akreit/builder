@@ -44,6 +44,11 @@ enum ExtractionError:
   /** No answer within the overall time limit (all attempts together). */
   case TimedOut
 
+  /** The PDF could not be opened or its text could not be read (PDFBox); `reason` is the exception
+    * class name, never document content.
+    */
+  case UnreadablePdf(reason: String)
+
 /** Reads the contents of an offer document, mapping its line items onto the category's `known`
   * Leistungen (or proposing new coarse ones) in the same pass.
   */

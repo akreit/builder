@@ -47,3 +47,4 @@ object Describe:
       s"Claude-API antwortete mit Status $code${errorType.fold("")(t => s" ($t)")}"
     case ExtractionError.TimedOut              => "Claude-API hat nicht rechtzeitig geantwortet"
     case ExtractionError.UnexpectedResponse(m) => s"Unerwartete Antwort der Claude-API: $m"
+    case ExtractionError.UnreadablePdf(reason) => s"PDF konnte nicht gelesen werden ($reason)"

@@ -1,0 +1,1 @@
+Unten folgt der Text eines Angebots als {label}, ausgelesen aus dem PDF. Jede Seite beginnt mit einer Markierung "=== Seite n ===". Gib als page immer diese Seitenzahl n an. Lies nur die Positionen, Summen und Angaben, die in diesem Text stehen; was hier fehlt, lässt du leer (value "", page 0). Ist eine Seite in mehrere Teile geteilt, setzt sie sich im nächsten Teil fort.

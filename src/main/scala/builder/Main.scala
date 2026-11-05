@@ -2,7 +2,8 @@ package builder
 
 import builder.extraction.ApiKey
 import builder.extraction.ClaudeOfferExtractor
-import builder.extraction.OfferExtractor
+import builder.extraction.MultiPassOfferExtractor
+import builder.extraction.OfferPass
 import builder.http.Api
 import builder.repo.DbConfig
 import builder.repo.PostgresProjectRepository
@@ -57,7 +58,8 @@ object Main extends IOApp.Simple:
         leistungen
       )
       claude <- ClaudeOfferExtractor.resource(ApiKey.fromEnv, model)
-      extractor <- cats.effect.Resource.eval(OfferExtractor.bounded(claude, permits = 2))
+      passes <- cats.effect.Resource.eval(OfferPass.bounded(claude, permits = 2))
+      extractor = MultiPassOfferExtractor(passes)
       server <- EmberServerBuilder
         .default[IO]
         .withHost(host)

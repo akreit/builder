@@ -31,6 +31,9 @@ class ExtractionPromptsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers
       sha256(
         prompts.knownHeading
       ) shouldBe "a161191b32d860ddda69b8ba9b49ea398b262fdc02a7d46ac43ce0828de6105c"
+      sha256(
+        prompts.documentPart
+      ) shouldBe "3b1877b4cb858785cfdc7dd76b01d834d437ab206a88bef2b427d9c4c2a95bd2"
       prompts.knownText(Nil) shouldBe prompts.knownEmpty
     }
   }
