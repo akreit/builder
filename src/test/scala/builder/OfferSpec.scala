@@ -270,3 +270,95 @@ class OfferSpec extends AnyFunSuite with Matchers with EitherValues with ScalaCh
     offerArgs("pausch", Other, 480_000).copy(lineItems = Nil).build.value.lineSumCheck shouldBe
       Some(LineSumCheck.Consistent)
   }
+
+  private val quantityInfoGen: Gen[QuantityInfo] =
+    Gen.oneOf(
+      Gen.const(QuantityInfo.Missing),
+      Gen
+        .choose(1, 50)
+        .map(n => QuantityInfo.Known(Extracted.manual(Quantity.from(BigDecimal(n)).value)))
+    )
+
+  /** Either both prices Missing, or unit=total Known (valid for quantity 1). */
+  private val pricePairGen: Gen[(PriceInfo, PriceInfo)] =
+    Gen.oneOf(
+      Gen.const((PriceInfo.Missing, PriceInfo.Missing)),
+      Gen
+        .choose(-10_000L, 50_000L)
+        .map { c =>
+          val m = Extracted.manual(eur(c))
+          (PriceInfo.Known(m), PriceInfo.Known(m))
+        }
+    )
+
+  private val lineItemGen: Gen[LineItem] =
+    for
+      q <- quantityInfoGen
+      (up, tot) <- pricePairGen
+      qty = (q, up) match
+        case (QuantityInfo.Known(_), PriceInfo.Known(_)) =>
+          QuantityInfo.Known(Extracted.manual(Quantity.from(1).value))
+        case (other, _) => other
+    yield LineItem
+      .from(Extracted.manual("Pos"), qty, None, None, None, None, up, tot)
+      .value
+
+  private def hasMissingTotal(items: List[LineItem]): Boolean =
+    items.exists(li =>
+      li.total match
+        case PriceInfo.Missing  => true
+        case PriceInfo.Known(_) => false
+    )
+
+  test(
+    "Offer.from accepts valid net/VAT/gross even when line items have Missing price or quantity"
+  ) {
+    forAll(netGen, Gen.nonEmptyListOf(lineItemGen)) { (n, items) =>
+      whenever(hasMissingTotal(items)) {
+        val net = eur(n)
+        val vat = vat19.vatOn(net)
+        Offer
+          .from(
+            offerId("gen"),
+            Extracted.manual(Contractor("Firma")),
+            Extracted.manual(Dates.of(2026, 10, 1).value),
+            None,
+            Other.id,
+            items,
+            Extracted.manual(net),
+            Extracted.manual(vat19),
+            Extracted.manual(vat),
+            Extracted.manual(net.plus(vat).value),
+            Nil,
+            Nil
+          )
+          .isRight shouldBe true
+      }
+    }
+  }
+
+  test("lineSumCheck never reports Consistent or Mismatch when any line price is missing") {
+    forAll(netGen, Gen.nonEmptyListOf(lineItemGen)) { (n, items) =>
+      whenever(hasMissingTotal(items)) {
+        val net = eur(n)
+        val vat = vat19.vatOn(net)
+        val o = Offer
+          .from(
+            offerId("silent"),
+            Extracted.manual(Contractor("Firma")),
+            Extracted.manual(Dates.of(2026, 10, 1).value),
+            None,
+            Other.id,
+            items,
+            Extracted.manual(net),
+            Extracted.manual(vat19),
+            Extracted.manual(vat),
+            Extracted.manual(net.plus(vat).value),
+            Nil,
+            Nil
+          )
+          .value
+        o.lineSumCheck shouldBe None
+      }
+    }
+  }
