@@ -99,7 +99,7 @@ Sources live in `docs/`. The output goes to `target/docs/`.
 ## Layout (`src/main/scala/builder`)
 
 - `Main.scala`: Ember server entry point
-- `SampleData.scala`: the in-memory `demo` project "Dach" (fictional sample offers)
+- `SampleData.scala`: the in-memory `demo` project "Sanierung" (fictional sample offers)
 - `domain/`: model, money, extracted offer data, errors
 - `totals/`: running-total calculation
 - `repo/`: project repository (Postgres via Skunk, versioned migrations)
