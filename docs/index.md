@@ -47,3 +47,7 @@ SampleData.project.map { p =>
 - `POST /ui/projects/{id}/categories/{categoryId}/favorite/{offerId}` (htmx; returns the re-rendered fragment)
 
 Run with `sbt run` and try `curl localhost:8080/projects/demo/totals`.
+
+## Architekturentwürfe
+
+- [Tokensparende Angebotsextraktion](token-saving-extraction.md) (Entwurf, keine Implementierung)
