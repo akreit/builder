@@ -22,7 +22,7 @@ sbt run          # start the HTTP server (port 8080, override with PORT=...)
 ```sh
 curl http://localhost:8080/health
 curl http://localhost:8080/projects/demo/totals
-curl http://localhost:8080/          # Projektübersicht (HTML)
+curl -i http://localhost:8080/       # 303 zur ersten Kategorie (/projekte/demo/kategorien/dach)
 curl -X POST http://localhost:8080/ui/projects/demo/categories/daemmung/favorite/daemmung-b
 ```
 
@@ -53,6 +53,14 @@ Das Image entsteht ohne zusätzliche sbt-Plugins: `sbt stage` kopiert alle Laufz
 > übernommen, es gibt keinen Import. Bisher gab es nur Testdaten. Alte Uploads und das alte Volume
 > einmal entfernen mit `docker compose down -v`, danach `docker compose up -d --build` startet mit
 > einer leeren Postgres-Datenbank.
+
+> **Achtung, Migration 2 (Kategorien als Tabs, #14):** Die alten Standardkategorien (Gauben,
+> Dämmung, Spenglerarbeiten, Balkondämmung, Dachfenster, Sonstiges) werden **samt ihrer Daten**
+> entfernt: hochgeladene Angebote und Uploads, Favoriten, Leistungen mit Zuordnungen und
+> Abdeckung, Kategorie-Änderungen sowie die alten Beispielangebote. Neue Standardkategorien sind
+> Dach, Fenster, Fassadendämmung, Elektrik, Heizung, Innenausbau. Von Nutzern angelegte Kategorien
+> behalten ihre Daten. Bisher gab es nur Testdaten; für einen sauberen Start
+> `docker compose down -v`.
 
 Die App speichert in Postgres (Zugriff mit [Skunk](https://typelevel.org/skunk/)). Verbindung über
 `DATABASE_URL` (`postgres://user:passwort@host:5432/db`) oder einzeln `DATABASE_HOST`,

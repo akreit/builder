@@ -1,6 +1,6 @@
 # builder
 
-Tracks renovation offers per project category (e.g. Gauben, Dämmung) and computes a running total.
+Tracks renovation offers per project category (Dach, Fenster, Fassadendämmung, Elektrik, Heizung, Innenausbau), one tab per category, and computes a running total.
 
 ## Running total rules
 
@@ -39,7 +39,8 @@ SampleData.project.map { p =>
 
 - `GET /health`
 - `GET /projects/{id}/totals` (JSON)
-- `GET /` Projektübersicht (German HTML)
+- `GET /` redirects (303) to the first category tab
+- `GET /projekte/{projectId}/kategorien/{categoryId}` page of one category (German HTML; unknown project or category: 404)
 - `POST /ui/projects/{id}/categories/{categoryId}/favorite/{offerId}` (htmx; returns the re-rendered fragment)
 
 Run with `sbt run` and try `curl localhost:8080/projects/demo/totals`.
