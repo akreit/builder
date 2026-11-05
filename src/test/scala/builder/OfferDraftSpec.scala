@@ -14,7 +14,7 @@ class OfferDraftSpec extends AnyFreeSpec with Matchers with EitherValues:
     OfferDraft.validate(
       raw,
       Fixtures.offerId("upl-1"),
-      CategoryId.from("dachfenster").value,
+      CategoryId.from("fenster").value,
       Currency.EUR
     )
 

@@ -52,9 +52,9 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
       val c = js.hcursor
       c.downField("net").as[String] shouldBe Right("21118.50")
       c.downField("missingCategories").as[List[String]] shouldBe Right(
-        List("Dachfenster", "Sonstiges")
+        List("Fenster", "Innenausbau")
       )
-      c.downField("undecidedCategories").as[List[String]] shouldBe Right(List("Dämmung"))
+      c.downField("undecidedCategories").as[List[String]] shouldBe Right(List("Fassadendämmung"))
     }
   }
 
@@ -66,17 +66,17 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
     json(uri"/projects/%20bad%21/totals").asserting(_._1 shouldBe Status.BadRequest)
   }
 
-  "GET / renders the German Projektübersicht as HTML" in {
-    run(Request[IO](Method.GET, uri"/")).asserting { (status, body, ct) =>
-      status shouldBe Status.Ok
-      ct shouldBe Some("text/html")
-      body should include("Projektübersicht: Dach")
-      body should include("Gesamtsumme")
-      body should include("21.118,50 €")
-      body should include("Entscheidung offen")
-      body should include("Kategorien ohne Angebot")
-      body should include("Als Favorit markieren")
-      body should include("/static/htmx.min.js")
+  "GET of a category page renders it in German as HTML with the project total" in {
+    run(Request[IO](Method.GET, uri"/projekte/demo/kategorien/fassadendaemmung")).asserting {
+      (status, body, ct) =>
+        status shouldBe Status.Ok
+        ct shouldBe Some("text/html")
+        body should include("Projekt: Dach")
+        body should include("Gesamtsumme")
+        body should include("21.118,50 €")
+        body should include("Entscheidung offen")
+        body should include("Als Favorit markieren")
+        body should include("/static/htmx.min.js")
     }
   }
 
@@ -92,7 +92,7 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
   }
 
   "POST favorite updates the favorite and re-renders the totals with the new sum" in {
-    val post = favorite(uri"/ui/projects/demo/categories/daemmung/favorite/daemmung-b", hx)
+    val post = favorite(uri"/ui/projects/demo/categories/fassadendaemmung/favorite/fassade-b", hx)
     withApp { a =>
       for
         r <- a.run(post)
@@ -112,7 +112,7 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
   }
 
   "POST favorite with an offer of another category is rejected with 422 and changes nothing" in {
-    val post = favorite(uri"/ui/projects/demo/categories/dachfenster/favorite/gauben-b", hx)
+    val post = favorite(uri"/ui/projects/demo/categories/fenster/favorite/gauben-b", hx)
     withApp { a =>
       for
         r <- a.run(post)
@@ -131,7 +131,7 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
   }
 
   "POST favorite for an unknown project is 404" in {
-    runWithHeaders(favorite(uri"/ui/projects/nope/categories/gauben/favorite/gauben-b", hx))
+    runWithHeaders(favorite(uri"/ui/projects/nope/categories/dach/favorite/gauben-b", hx))
       .asserting { (status, body, h) =>
         status shouldBe Status.NotFound
         retargeted(h) shouldBe (Some("#fehler"), Some("innerHTML"))
@@ -148,7 +148,7 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
   }
 
   "POST favorite for an unknown offer is 404" in {
-    runWithHeaders(favorite(uri"/ui/projects/demo/categories/gauben/favorite/gibtsnicht", hx))
+    runWithHeaders(favorite(uri"/ui/projects/demo/categories/dach/favorite/gibtsnicht", hx))
       .asserting { (status, body, _) =>
         status shouldBe Status.NotFound
         body should include("Angebot nicht gefunden")
@@ -156,7 +156,7 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
   }
 
   "POST favorite without HX-Request header is 403" in {
-    runWithHeaders(favorite(uri"/ui/projects/demo/categories/daemmung/favorite/daemmung-b"))
+    runWithHeaders(favorite(uri"/ui/projects/demo/categories/fassadendaemmung/favorite/fassade-b"))
       .asserting { (status, body, h) =>
         status shouldBe Status.Forbidden
         retargeted(h) shouldBe (Some("#fehler"), Some("innerHTML"))
@@ -167,7 +167,7 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
   "POST favorite from a foreign Origin is 403" in {
     runWithHeaders(
       favorite(
-        uri"/ui/projects/demo/categories/daemmung/favorite/daemmung-b",
+        uri"/ui/projects/demo/categories/fassadendaemmung/favorite/fassade-b",
         hx,
         "Origin" -> "https://evil.example",
         "Host" -> "127.0.0.1:8080"
@@ -181,7 +181,7 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
   "POST favorite from the same Origin is accepted" in {
     runWithHeaders(
       favorite(
-        uri"/ui/projects/demo/categories/daemmung/favorite/daemmung-b",
+        uri"/ui/projects/demo/categories/fassadendaemmung/favorite/fassade-b",
         hx,
         "Origin" -> "http://127.0.0.1:8080",
         "Host" -> "127.0.0.1:8080"
@@ -189,8 +189,8 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
     ).asserting(_._1 shouldBe Status.Ok)
   }
 
-  "GET / has the #fehler slot and the htmx error responseHandling config" in {
-    run(Request[IO](Method.GET, uri"/")).asserting { (_, body, _) =>
+  "a category page has the #fehler slot and the htmx error responseHandling config" in {
+    run(Request[IO](Method.GET, uri"/projekte/demo/kategorien/dach")).asserting { (_, body, _) =>
       body should include("<div id=\"fehler\"")
       body should include("name=\"htmx-config\"")
       body should include("&quot;[45]..&quot;,&quot;swap&quot;:true")

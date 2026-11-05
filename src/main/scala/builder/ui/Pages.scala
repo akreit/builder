@@ -38,6 +38,10 @@ object Pages:
       |.st-enthalten{background:#e3f4e3}.st-nicht{background:#f3f3f3}.st-ausgeschlossen{background:#f8dede}.st-unklar{background:#fff3cd}
       |td.pruefen,div.pruefen{outline:2px solid #f0ad4e;outline-offset:-2px}form.aendern{display:inline-block;margin:.15rem .25rem .15rem 0}
       |table.matrix select{font-size:.8rem}details summary{cursor:pointer}section.leistungen{margin-top:1rem}
+      |nav.tabs ul{list-style:none;display:flex;flex-wrap:wrap;gap:.25rem;padding:0;margin:1rem 0 0;border-bottom:2px solid #ccc}
+      |nav.tabs a{display:block;padding:.4rem .9rem;border:1px solid #ccc;border-bottom:none;border-radius:6px 6px 0 0;text-decoration:none;color:#222;background:#f4f6fa}
+      |nav.tabs a.aktiv{background:#fff;font-weight:bold;border-color:#888;position:relative;top:2px}
+      |nav.tabs a.gezaehlt{border-top:3px solid #5cb85c}nav.tabs a.offen{border-top:3px solid #f0ad4e}nav.tabs a.fehlt{border-top:3px solid #d9534f}
       |table.rangliste td{vertical-align:top}td.gesamt{font-size:1.05rem}section.gewichtung{margin:1rem 0}section.gewichtung input[type=number]{width:4rem}""".stripMargin
 
   private def statusBadge(s: CategoryStatus): Frag = s match
@@ -642,10 +646,69 @@ object Pages:
       uploadForm(project, ct.category)
     )
 
-  /** The part of the page htmx replaces after a favorite change: categories and totals. */
-  def projectFragment(view: ProjectView): TypedTag[String] =
+  /** URL of the page (tab) of one category. */
+  def categoryUrl(project: ProjectId, category: CategoryId): String =
+    s"/projekte/${project.value}/kategorien/${category.value}"
+
+  /** The landing URL of a project: its first category tab, or the project page without one. */
+  def landingUrl(view: ProjectView): String =
+    view.project.categories.headOption.fold("/")(c => categoryUrl(view.project.id, c.id))
+
+  /** The requested category if the project has it, else the first one (e.g. after deleting it). */
+  def activeCategory(view: ProjectView, requested: Option[CategoryId]): Option[Category] =
+    val cats = view.project.categories
+    requested.flatMap(r => cats.find(_.id == r)).orElse(cats.headOption)
+
+  private def statusClass(s: CategoryStatus): String = s match
+    case CategoryStatus.Counted(_, _, _, _, _) => "gezaehlt"
+    case CategoryStatus.NeedsDecision(_)       => "offen"
+    case CategoryStatus.NoOffer                => "fehlt"
+
+  /** One tab per category, in the project's order; the active one is marked. */
+  private def tabs(project: Project, totals: ProjectTotals, active: Option[Category]): Frag =
+    tags2.nav(cls := "tabs", attr("aria-label") := "Kategorien")(
+      ul(
+        totals.categories.map(ct =>
+          val isActive = active.exists(_.id == ct.category.id)
+          li(
+            a(
+              href := categoryUrl(project.id, ct.category.id),
+              cls := s"tab ${statusClass(ct.status)}${if isActive then " aktiv" else ""}",
+              attr("data-kategorie") := ct.category.id.value,
+              if isActive then attr("aria-current") := "page" else frag()
+            )(ct.category.name.value)
+          )
+        )
+      )
+    )
+
+  private def categoryTotal(ct: CategoryTotal): Frag =
+    tags2.section(cls := "summe", id := "kategorie-summe")(
+      h3(s"Summe ${ct.category.name.value}"),
+      ct.status match
+        case CategoryStatus.Counted(_, c, net, gross, _) =>
+          table(
+            tr(th("Gezählt"), td(c.name)),
+            tr(th("Netto"), td(cls := "betrag")(Format.money(net))),
+            tr(th("Brutto"), td(cls := "betrag")(Format.money(gross)))
+          )
+        case CategoryStatus.NeedsDecision(_) =>
+          p(cls := "hinweis")("Noch nicht in der Summe: bitte einen Favoriten wählen.")
+        case CategoryStatus.NoOffer =>
+          p(cls := "hinweis")("Noch kein Angebot – nicht in der Summe.")
+    )
+
+  /** The part of the page htmx replaces after a change: tabs, the active category and totals. The
+    * active category rides along with every edit (`hx-vals`), so the response re-renders the same
+    * tab.
+    */
+  def projectFragment(view: ProjectView, active: Option[Category]): TypedTag[String] =
     val totals = Totals.compute(view.project)
-    div(id := "projekt")(
+    val current = active.flatMap(c => totals.categories.find(_.category.id == c.id))
+    div(
+      id := "projekt",
+      current.fold(frag())(ct => attr("hx-vals") := s"""{"ansicht":"${ct.category.id.value}"}""")
+    )(
       if view.warnings.isEmpty then frag()
       else
         div(cls := "warnung", id := "datenwarnungen")(
@@ -653,7 +716,10 @@ object Pages:
           ul(view.warnings.map(li(_)))
         )
       ,
-      totals.categories.map(ct => categorySection(view, ct)),
+      tabs(view.project, totals, active),
+      current.fold[Frag](p(cls := "hinweis")("Noch keine Kategorie angelegt."))(ct =>
+        frag(categorySection(view, ct), categoryTotal(ct))
+      ),
       weightsForm(view),
       editForm(view.project, List("aktion" -> "kategorie-neu"), auto = false)(
         input(
@@ -664,7 +730,7 @@ object Pages:
         button(tpe := "submit")("Kategorie hinzufügen")
       ),
       tags2.section(cls := "summe", id := "summe")(
-        h2("Gesamtsumme"),
+        h2("Gesamtsumme Projekt"),
         table(
           tr(th("Gesamtsumme netto"), td(cls := "betrag")(Format.money(totals.net))),
           tr(th("Gesamtsumme brutto"), td(cls := "betrag")(Format.money(totals.gross)))
@@ -674,12 +740,6 @@ object Pages:
           p(cls := "hinweis")(
             "Vorläufige Summe: Kategorien mit offener Entscheidung oder ohne Angebot sind nicht enthalten."
           )
-      ),
-      tags2.section(id := "ohne-angebot")(
-        h2("Kategorien ohne Angebot"),
-        if totals.missingCategories.isEmpty then
-          p("Keine – für jede Kategorie liegt ein Angebot vor.")
-        else ul(totals.missingCategories.map(c => li(c.name.value)))
       )
     )
 
@@ -698,16 +758,16 @@ object Pages:
       )
     ).render
 
-  /** Projektübersicht. */
-  def overview(view: ProjectView): String =
+  /** The page of one category tab (or, without categories, the bare project page). */
+  def categoryPage(view: ProjectView, active: Option[Category]): String =
     val project = view.project
     layout(
-      s"Projektübersicht – ${project.name}",
-      h1(s"Projektübersicht: ${project.name}"),
+      active.fold(s"Projekt – ${project.name}")(c => s"${c.name.value} – ${project.name}"),
+      h1(s"Projekt: ${project.name}"),
       p(cls := "hinweis")(
         s"Währung ${project.currency.code} · Beispieldaten (fiktive Firmen und Beträge) · hochgeladene Angebote werden gespeichert"
       ),
-      projectFragment(view)
+      projectFragment(view, active)
     )
 
   /** htmx 2 defaults to not swapping 4xx/5xx; swap them (still flagged as errors) so HX-Retarget

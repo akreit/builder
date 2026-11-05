@@ -22,7 +22,7 @@ sbt run          # start the HTTP server (port 8080, override with PORT=...)
 ```sh
 curl http://localhost:8080/health
 curl http://localhost:8080/projects/demo/totals
-curl http://localhost:8080/          # Projektübersicht (HTML)
+curl -i http://localhost:8080/       # 303 zur ersten Kategorie (/projekte/demo/kategorien/dach)
 curl -X POST http://localhost:8080/ui/projects/demo/categories/daemmung/favorite/daemmung-b
 ```
 

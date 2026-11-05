@@ -17,7 +17,7 @@ class LeistungenSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with E
   import RawOffers.*
 
   private val pdf: Array[Byte] = "%PDF-1.7\nfiktives Angebot".getBytes("UTF-8")
-  private val fenster = CategoryId.from("dachfenster").value
+  private val fenster = CategoryId.from("fenster").value
   private def lid(s: String) = LeistungId.from(s).value
   private def leistung(id: String, name: String) =
     Leistung(lid(id), fenster, LeistungName.from(name).value)
@@ -28,11 +28,11 @@ class LeistungenSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with E
   "a plan maps items onto known Leistungen and adds proposed ones with fresh ids" in {
     val plan = LeistungPlan.plan(dachfensterMitLeistungen, fenster, seeded, LazyList(lid("l-neu")))
     plan.added shouldBe List(leistung("l-neu", "Gerüst"))
-    plan.items shouldBe List(Some(lid("dachfenster-fenster")), Some(lid("l-neu")))
+    plan.items shouldBe List(Some(lid("fenster-fenster")), Some(lid("l-neu")))
     plan.coverage.map(c => c.leistung.value -> c.coverage) should contain theSameElementsAs List(
-      "dachfenster-fenster" -> Coverage.Enthalten,
-      "dachfenster-einbau" -> Coverage.Unklar,
-      "dachfenster-innenausbau" -> Coverage.Ausgeschlossen,
+      "fenster-fenster" -> Coverage.Enthalten,
+      "fenster-einbau" -> Coverage.Unklar,
+      "fenster-innenausbau" -> Coverage.Ausgeschlossen,
       "l-neu" -> Coverage.Enthalten
     )
   }
@@ -43,13 +43,13 @@ class LeistungenSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with E
     )
     val plan = LeistungPlan.plan(raw, fenster, seeded, LazyList(lid("l-neu")))
     plan.added shouldBe Nil
-    plan.items shouldBe List(Some(lid("dachfenster-fenster")), Some(lid("dachfenster-einbau")))
+    plan.items shouldBe List(Some(lid("fenster-fenster")), Some(lid("fenster-einbau")))
   }
 
   "unknown references stay unmapped and unknown statuses become 'unklar'" in {
     val raw = dachfenster.copy(
       lineItems = dachfenster.lineItems.map(_.copy(leistung = Some("gibt-es-nicht"))),
-      abdeckung = Some(List(RawAbdeckung("dachfenster-einbau", "vielleicht", 0, Confidence.High)))
+      abdeckung = Some(List(RawAbdeckung("fenster-einbau", "vielleicht", 0, Confidence.High)))
     )
     val plan = LeistungPlan.plan(raw, fenster, seeded, LazyList.empty)
     plan.items shouldBe List(None, None)
@@ -139,7 +139,7 @@ class LeistungenSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with E
           app,
           Request[IO](
             Method.POST,
-            Uri.unsafeFromString("/ui/projects/demo/categories/dachfenster/angebote")
+            Uri.unsafeFromString("/ui/projects/demo/categories/fenster/angebote")
           )
             .withEntity(mp)
             .putHeaders(mp.headers)
@@ -151,12 +151,13 @@ class LeistungenSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with E
     run(
       app,
       Request[IO](Method.POST, Uri.unsafeFromString("/ui/projects/demo/aenderungen"))
-        .withEntity(UrlForm(fields*))
+        .withEntity(UrlForm((("ansicht" -> "fenster") +: fields)*))
         .putHeaders(Header.Raw(org.typelevel.ci.CIString("HX-Request"), "true"))
     )
 
   private def page(app: TestApp): IO[String] =
-    run(app, Request[IO](Method.GET, Uri.unsafeFromString("/"))).map(_._2)
+    run(app, Request[IO](Method.GET, Uri.unsafeFromString("/projekte/demo/kategorien/fenster")))
+      .map(_._2)
 
   /** Leistung names of the Dachfenster matrix, in order. */
   private def leistungen(html: String): List[(String, String)] =
@@ -194,9 +195,9 @@ class LeistungenSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with E
         leistungen(html).map(_._2) shouldBe
           List("Fenster inkl. Zubehör", "Einbau", "Innenausbau", "Entsorgung", "Gerüst")
         val offer = offers(html).headOption.getOrElse("")
-        status(html, "dachfenster-fenster", offer) shouldBe Some("enthalten")
-        status(html, "dachfenster-innenausbau", offer) shouldBe Some("ausgeschlossen")
-        status(html, "dachfenster-entsorgung", offer) shouldBe Some("unklar")
+        status(html, "fenster-fenster", offer) shouldBe Some("enthalten")
+        status(html, "fenster-innenausbau", offer) shouldBe Some("ausgeschlossen")
+        status(html, "fenster-entsorgung", offer) shouldBe Some("unklar")
         html should include("3.750,00")
         // The second offer of the category is read against the grown list, without a second "Gerüst".
         known shouldBe List(
@@ -219,7 +220,7 @@ class LeistungenSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with E
               app,
               "aktion" -> "status-setzen",
               "angebot" -> offer,
-              "leistung" -> "dachfenster-entsorgung",
+              "leistung" -> "fenster-entsorgung",
               "status" -> "enthalten"
             ) >>
               upload(app)
@@ -232,13 +233,13 @@ class LeistungenSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with E
               app,
               "aktion" -> "status-setzen",
               "angebot" -> offer,
-              "leistung" -> "dachfenster-entsorgung",
+              "leistung" -> "fenster-entsorgung",
               "status" -> "auto"
             )
           )
       yield
-        status(restarted, "dachfenster-entsorgung", offer) shouldBe Some("enthalten")
-        status(reset, "dachfenster-entsorgung", offer) shouldBe Some("unklar")
+        status(restarted, "fenster-entsorgung", offer) shouldBe Some("enthalten")
+        status(reset, "fenster-entsorgung", offer) shouldBe Some("unklar")
     }
   }
 
@@ -258,7 +259,7 @@ class LeistungenSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with E
           app,
           "aktion" -> "leistung-zusammenfuehren",
           "leistung" -> geruest,
-          "ziel" -> "dachfenster-einbau"
+          "ziel" -> "fenster-einbau"
         )
         (_, reassigned) <- edit(
           app,
@@ -270,13 +271,13 @@ class LeistungenSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with E
         (_, deleted) <- edit(
           app,
           "aktion" -> "leistung-loeschen",
-          "leistung" -> "dachfenster-innenausbau"
+          "leistung" -> "fenster-innenausbau"
         )
       yield
         leistungen(renamed).map(_._2) should contain("Montage")
         leistungen(merged).map(_._2) should not contain "Montage"
         // The merged item now counts for "Einbau", which turns from "unklar" to "enthalten".
-        status(merged, "dachfenster-einbau", offer) shouldBe Some("enthalten")
+        status(merged, "fenster-einbau", offer) shouldBe Some("enthalten")
         reassigned should include("Nicht zugeordnet")
         reassigned should include("Pos. 1: Dachfenster liefern")
         leistungen(deleted).map(_._2) shouldBe List("Fenster inkl. Zubehör", "Einbau", "Entsorgung")
@@ -303,12 +304,12 @@ class LeistungenSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with E
         (usedStatus, used) <- edit(
           app,
           "aktion" -> "kategorie-loeschen",
-          "kategorie" -> "dachfenster"
+          "kategorie" -> "fenster"
         )
-        (seedStatus, _) <- edit(app, "aktion" -> "kategorie-loeschen", "kategorie" -> "gauben")
+        (seedStatus, _) <- edit(app, "aktion" -> "kategorie-loeschen", "kategorie" -> "dach")
       yield
         added should include("Gerüstbau")
-        renamed should include("<h2>Gerüst<")
+        renamed should include(">Gerüst</a>")
         deletedStatus shouldBe Status.Ok
         deleted should not include newId
         usedStatus shouldBe Status.Conflict
@@ -330,7 +331,7 @@ class LeistungenSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with E
           app,
           "aktion" -> "status-setzen",
           "angebot" -> "upl-x",
-          "leistung" -> "dachfenster-einbau",
+          "leistung" -> "fenster-einbau",
           "status" -> "vielleicht"
         )
         (missing, _) <- edit(

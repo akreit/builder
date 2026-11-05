@@ -27,7 +27,7 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
       app: TestApp,
       bytes: Array[Byte],
       name: String = "angebot.pdf",
-      category: String = "dachfenster",
+      category: String = "fenster",
       headers: List[(String, String)] = List("HX-Request" -> "true")
   ): IO[(Status, String)] =
     Multiparts
@@ -124,7 +124,10 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
 
   "uploads and favorites survive a restart" in {
     def favorite(app: TestApp) = app.http.run(
-      Request[IO](Method.POST, uri"/ui/projects/demo/categories/daemmung/favorite/daemmung-b")
+      Request[IO](
+        Method.POST,
+        uri"/ui/projects/demo/categories/fassadendaemmung/favorite/fassade-b"
+      )
         .putHeaders("HX-Request" -> "true")
     )
     val second = dachfenster.copy(contractor = f("Dachbau Phantasie OHG"))
@@ -136,7 +139,7 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
           .use(app => upload(app, pdf) >> favorite(app))
         reopened <- TestApp.resource(dir, FakeExtractor(Right(dachfenster))).use { app =>
           app.http
-            .run(Request[IO](Method.GET, uri"/"))
+            .run(Request[IO](Method.GET, uri"/projekte/demo/kategorien/fenster"))
             .flatMap(_.bodyText.compile.string)
             .product(net(app))
         }
@@ -144,7 +147,7 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
         val (page, total) = reopened
         page should include("Zimmerei Erfunden GmbH")
         page should include("Dachbau Phantasie OHG")
-        // Two Dachfenster offers, no favorite: undecided. Dämmung favorite daemmung-b counts.
+        // Two Dachfenster offers, no favorite: undecided. Dämmung favorite fassade-b counts.
         total shouldBe "31906.50"
     )
   }
@@ -230,7 +233,9 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
     TestDb.sql(dir, statements*)
 
   private def page(app: TestApp): IO[String] =
-    app.http.run(Request[IO](Method.GET, uri"/")).flatMap(_.bodyText.compile.string)
+    app.http
+      .run(Request[IO](Method.GET, uri"/projekte/demo/kategorien/fenster"))
+      .flatMap(_.bodyText.compile.string)
 
   "an unreadable stored extraction is shown as failed and its favorite is reported as ignored" in {
     TestApp.tempDir.use(dir =>
@@ -284,7 +289,7 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
           )
         )
       )
-      .map(_ shouldBe List.fill(5)((false, false, List(1))))
+      .map(_ shouldBe List.fill(5)((false, false, List(1, 2))))
   }
 
   "a lost database connection is shown as a storage error, not a crash" in {
@@ -293,7 +298,7 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
         for
           before <- page(app)
           _ <- TestDb.terminateConnections(dir)
-          response <- app.http.run(Request[IO](Method.GET, uri"/"))
+          response <- app.http.run(Request[IO](Method.GET, uri"/projekte/demo/kategorien/fenster"))
           body <- response.bodyText.compile.string
         yield
           before should not include "Datenbankfehler"
@@ -364,9 +369,9 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
         // Same offer id, other project: no matching (project_id, id) row in offers.
         foreign <- sql(
           dir,
-          "INSERT INTO favorites VALUES ('anderes', 'daemmung', 'daemmung-b')"
+          "INSERT INTO favorites VALUES ('anderes', 'fassadendaemmung', 'fassade-b')"
         ).attempt
-        own <- sql(dir, "INSERT INTO favorites VALUES ('demo', 'gauben', 'daemmung-b')").attempt
+        own <- sql(dir, "INSERT INTO favorites VALUES ('demo', 'dach', 'fassade-b')").attempt
       yield
         foreign.left.map(_.getMessage.contains("foreign key")) shouldBe Left(true)
         own.isRight shouldBe true
