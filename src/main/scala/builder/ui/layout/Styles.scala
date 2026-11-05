@@ -19,6 +19,7 @@ object Styles:
       |.flag.niedrig{background:#f0ad4e;color:#000}.flag.mittel{background:#eee}.seite{color:#666;font-size:.8rem;white-space:nowrap}
       |.warnung{background:#fff3cd;padding:.5rem 1rem;border-radius:6px}.abweichung{background:#f5d0d0;padding:.5rem 1rem;border-radius:6px}
       |table.felder th{width:10rem}form.hochladen{margin:.5rem 0}.htmx-indicator{display:none}.htmx-request .htmx-indicator,.htmx-request.htmx-indicator{display:inline}
+      |a.button{display:inline-block;margin:0 0 .75rem;padding:.4rem .75rem;background:#2f3b4c;color:#fff;border-radius:4px;text-decoration:none}a.button:hover{background:#44556d}a.button:focus-visible{outline:3px solid #f0ad4e;outline-offset:2px}
       |table.matrix td,table.matrix th{vertical-align:top;border:1px solid #e3e3e3}table.matrix th.leistung{min-width:9rem}
       |.st-enthalten{background:#e3f4e3}.st-nicht{background:#f3f3f3}.st-ausgeschlossen{background:#f8dede}.st-unklar{background:#fff3cd}
       |td.pruefen,div.pruefen{outline:2px solid #f0ad4e;outline-offset:-2px}form.aendern{display:inline-block;margin:.15rem .25rem .15rem 0}

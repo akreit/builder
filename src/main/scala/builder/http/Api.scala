@@ -149,6 +149,13 @@ object UploadForm:
     )
 
 object Endpoints:
+  val comparisonPdf = endpoint.get
+    .in("projekte" / path[String]("projectId") / "leistungsvergleich.pdf")
+    .out(header("Content-Type", "application/pdf"))
+    .out(header("Content-Disposition", "attachment; filename=leistungsvergleich.pdf"))
+    .out(byteArrayBody)
+    .errorOut(ApiError.output)
+
   val health =
     endpoint.get.in("health").out(jsonBody[HealthResponse])
 
@@ -338,6 +345,23 @@ final class Api(
                 ApiError.ProjectNotFound(raw)
             }
           )
+
+  private def comparisonPdfLogic(raw: String): IO[Either[ApiError, Array[Byte]]] =
+    ProjectId.from(raw) match
+      case Left(_)   => IO.pure(Left(ApiError.InvalidProjectId(raw)))
+      case Right(id) =>
+        repo.find(id).flatMap {
+          case Left(RepoError.Storage(code)) => IO.pure(Left(ApiError.StorageFailed(code.value)))
+          case Left(
+                RepoError.ProjectNotFound(_) | RepoError.CategoryNotFound(_) |
+                RepoError.OfferNotFound(_) | RepoError.LeistungNotFound(_) |
+                RepoError.ItemNotFound(_, _) | RepoError.Invalid(_) | RepoError.Rejected(_)
+              ) =>
+            IO.pure(Left(ApiError.ProjectNotFound(raw)))
+          case Right(view) =>
+            IO.blocking(builder.pdf.ComparisonPdf.render(view))
+              .map(_.left.map(_ => ApiError.StorageFailed("pdf-export")))
+        }
 
   private def notFound(what: String): HtmlError =
     HtmlError(StatusCode.NotFound, Pages.message(s"$what nicht gefunden"))
@@ -570,6 +594,7 @@ final class Api(
     List(
       Endpoints.health.serverLogicSuccess[IO](_ => IO.pure(HealthResponse("ok"))),
       Endpoints.totals.serverLogic[IO](totalsLogic),
+      Endpoints.comparisonPdf.serverLogic[IO](comparisonPdfLogic),
       Endpoints.landing.serverLogic[IO](_ => landing),
       Endpoints.categoryPage.serverLogic[IO](categoryPageLogic.tupled),
       Endpoints.markFavorite
