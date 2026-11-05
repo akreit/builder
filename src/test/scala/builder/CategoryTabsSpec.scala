@@ -118,3 +118,38 @@ class CategoryTabsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
       )
     }
   }
+
+  private def headerText(body: String): Option[String] =
+    "<header class=\"kopfzeile\" id=\"kopfzeile\"><a href=\"/\">([^<]+)</a></header>".r
+      .findFirstMatchIn(body)
+      .map(_.group(1))
+
+  "the start route lands on a page with the fixed header showing the project name" in {
+    withApp(app =>
+      app
+        .run(Request[IO](Method.GET, uri"/"))
+        .map(_.headers.get(CIString("Location")).map(_.head.value).getOrElse(""))
+        .flatMap(location => get(app, Uri.unsafeFromString(location)))
+    ).asserting((status, body, _) =>
+      status shouldBe Status.Ok
+      headerText(body) shouldBe Some("Dach")
+    )
+  }
+
+  "every category page has the header above the sidebar" in {
+    page(uri"/projekte/demo/kategorien/elektrik").asserting { (_, body, _) =>
+      headerText(body) shouldBe Some("Dach")
+      body should include("class=\"mit-seitenleiste\"")
+      body.indexOf("id=\"kopfzeile\"") should be < body.indexOf("<nav class=\"tabs\"")
+    }
+  }
+
+  "a page outside a project shows the app name in the header" in {
+    page(uri"/projekte/nope/kategorien/dach").asserting((_, body, _) =>
+      headerText(body) shouldBe Some("Builder")
+    )
+  }
+
+  "the header falls back to the app name for a blank project name" in {
+    IO(builder.ui.layout.Header.title(Some("  "))).asserting(_ shouldBe "Builder")
+  }

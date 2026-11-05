@@ -6,6 +6,7 @@ import builder.repo.*
 import builder.ui.common.Messages
 import builder.ui.navigation.Tabs
 import builder.ui.pages.CategoryPage
+import builder.ui.pages.ErrorPage
 import builder.ui.project.ProjectFragment
 import builder.ui.text.Describe
 
@@ -32,8 +33,8 @@ object Pages:
   /** Error fragment swapped into the layout's `#fehler` slot. */
   def errorFragment(text: String): String = Messages.errorFragment(text).render
 
-  /** A standalone error message (body of an HTML error response). */
-  def message(text: String): String = Messages.message(text).render
+  /** A full error page (body of an HTML error response such as 404). */
+  def message(text: String): String = ErrorPage.errorPage(text)
 
   def describe(e: DomainError): String = Describe.describe(e)
   def describe(i: Issue): String = Describe.describe(i)

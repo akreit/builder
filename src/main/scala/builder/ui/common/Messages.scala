@@ -6,4 +6,3 @@ import scalatags.Text.all.*
 object Messages:
   /** Error fragment swapped into the `#fehler` slot of the layout. */
   def errorFragment(text: String): TypedTag[String] = p(cls := "fehlermeldung")(text)
-  def message(text: String): TypedTag[String] = div(cls := "fehler")(text)

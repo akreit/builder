@@ -5,7 +5,15 @@ import scalatags.Text.tags2
 
 /** The HTML document frame shared by all pages. */
 object Layout:
-  private[ui] def layout(pageTitle: String, content: Frag*): String =
+  /** A full page: fixed header (project or app name), then the content; `withSidebar` leaves room
+    * for the category sidebar on the left.
+    */
+  private[ui] def layout(
+      pageTitle: String,
+      projectName: Option[String],
+      withSidebar: Boolean,
+      content: Frag*
+  ): String =
     doctype("html")(
       html(lang := "de")(
         head(
@@ -16,7 +24,10 @@ object Layout:
           meta(name := "htmx-config", attr("content") := htmxConfig),
           script(src := "/static/htmx.min.js")
         ),
-        body(div(id := "fehler", attr("role") := "alert"), frag(content*))
+        body(if withSidebar then cls := "mit-seitenleiste" else frag())(
+          Header.bar(projectName),
+          div(cls := "inhalt")(div(id := "fehler", attr("role") := "alert"), frag(content*))
+        )
       )
     ).render
 

@@ -13,6 +13,8 @@ object CategoryPage:
     val project = view.project
     layout(
       active.fold(s"Projekt – ${project.name}")(c => s"${c.name.value} – ${project.name}"),
+      Some(project.name),
+      true,
       h1(s"Projekt: ${project.name}"),
       p(cls := "hinweis")(
         s"Währung ${project.currency.code} · Beispieldaten (fiktive Firmen und Beträge) · hochgeladene Angebote werden gespeichert"
