@@ -25,6 +25,8 @@ object Styles:
       |table.matrix select{font-size:.8rem}details summary{cursor:pointer}section.leistungen{margin-top:1rem}
       |.positionen details{margin:.35rem 0;border:1px solid #e3e3e3;border-radius:4px;padding:.2rem .55rem}
       |.positionen summary{list-style-position:outside}.positionen .fehlend{background:#f5d0d0;font-size:.8rem;padding:0 .3rem;border-radius:3px;white-space:nowrap}
+      |details.zellen-positionen{margin-top:.35rem;font-size:.85rem}details.zellen-positionen>summary{color:#444}
+      |details.zellen-positionen .positionen{margin-top:.25rem}
       |nav.tabs{position:fixed;top:3rem;left:0;bottom:0;width:13rem;box-sizing:border-box;overflow-y:auto;background:#f4f6fa;border-right:1px solid #ddd;padding:1rem .5rem}
       |nav.tabs ul{list-style:none;display:flex;flex-direction:column;gap:.25rem;padding:0;margin:0}
       |nav.tabs a{display:block;padding:.45rem .75rem;border:1px solid transparent;border-left:4px solid #ccc;border-radius:4px;text-decoration:none;color:#222}
