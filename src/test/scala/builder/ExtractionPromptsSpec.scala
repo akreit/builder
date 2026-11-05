@@ -52,3 +52,12 @@ class ExtractionPromptsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers
         )
       )
   }
+
+  "startup errors identify the resource and unreadable detail in their log message" in {
+    PromptLoadError.Missing("prompts/missing.md").getMessage shouldBe
+      "Missing prompt resource: prompts/missing.md"
+    PromptLoadError
+      .Unreadable("prompts/invalid-utf8.md", "MalformedInputException")
+      .getMessage shouldBe
+      "Unreadable prompt resource: prompts/invalid-utf8.md (MalformedInputException)"
+  }

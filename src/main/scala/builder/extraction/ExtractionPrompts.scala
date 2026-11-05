@@ -13,6 +13,10 @@ enum PromptLoadError extends Exception:
   case Missing(path: String)
   case Unreadable(path: String, detail: String)
 
+  override def getMessage: String = this match
+    case Missing(path)            => s"Missing prompt resource: $path"
+    case Unreadable(path, detail) => s"Unreadable prompt resource: $path ($detail)"
+
 /** Immutable prompt text loaded once when wiring the extractor. */
 final case class ExtractionPrompts(
     offerExtraction: String,
