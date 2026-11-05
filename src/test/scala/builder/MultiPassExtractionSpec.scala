@@ -260,6 +260,54 @@ class MultiPassExtractionSpec extends AsyncFreeSpec with AsyncIOSpec with Matche
     (b.inputTokens + b.maxOutputTokens <= b.contextTokens, b.maxOutputTokens) shouldBe (true, 16000)
   }
 
+  "conflicting totals use the last part and keep the other value as a low-confidence note" in {
+    val chunks = List(1, 2).map(i => TextChunk(i, 2, List(PdfPage(i, ""))))
+    val first = fragment(List(1), 1) // has totals 119.00 on page 1
+    val second = fragment(List(2), 2).copy(gross = f("120.00", 2))
+    val merged = RawOfferMerge.merge(chunks.zip(List(first, second)))
+    merged.gross.text shouldBe Some("120.00")
+    merged.notes.flatMap(_.text) should contain(
+      "Abweichende Angabe Brutto in Teil 1/2 (Seite 1): 119.00 (verwendet: 120.00)"
+    )
+    merged.notes.forall(_.confidence == Confidence.Low) shouldBe true
+  }
+
+  "a repeat of an item on a page cut between two parts is kept once; equal items on other pages stay" in {
+    val split = TextChunk(1, 2, List(PdfPage(1, ""), PdfPage(2, "a")))
+    val rest = TextChunk(2, 2, List(PdfPage(2, "b"), PdfPage(3, "")))
+    def on(page: Int) = RawOffers
+      .item("Dachlatten", "1", "Stk", "1.00", "1.00")
+      .copy(description = f("Dachlatten", page))
+    val merged = RawOfferMerge.merge(
+      List(
+        split -> fragment(Nil, 9).copy(lineItems = List(on(1), on(2))),
+        rest -> fragment(Nil, 9).copy(lineItems = List(on(2), on(3)))
+      )
+    )
+    merged.lineItems.map(_.description.page) shouldBe List(Some(1), Some(2), Some(3))
+  }
+
+  "cancelling a running multi-pass extraction releases the permits" in {
+    for
+      running <- Ref.of[IO, Int](0)
+      hanging = new OfferPass[IO]:
+        def run(content: PassContent, known: List[builder.domain.Leistung]) =
+          content match
+            case PassContent.Text(c) if c.total > 1 =>
+              (running.update(_ + 1) >> IO.never).onCancel(running.update(_ - 1))
+            case PassContent.Text(_) | PassContent.Image(_, _) | PassContent.ScannedPdf(_) =>
+              IO.pure(Right(RawOffers.dachfenster))
+        def promptText(known: List[builder.domain.Leistung]) = "p"
+      bounded <- OfferPass.bounded(hanging, permits = 2)
+      extractor = MultiPassOfferExtractor(bounded)
+      fiber <- extractor.extract(longPdf, OfferFileType.Pdf, Nil).start
+      _ <- running.get.iterateUntil(_ == 2)
+      _ <- fiber.cancel
+      left <- running.get
+      after <- extractor.extract(TestPdfs.offer(1), OfferFileType.Pdf, Nil).timeout(5.seconds)
+    yield (left, after) shouldBe (0, Right(RawOffers.dachfenster))
+  }
+
   private lazy val stubPass: OfferPass[IO] = new OfferPass[IO]:
     def run(content: PassContent, known: List[builder.domain.Leistung]) =
       IO.pure(Right(RawOffers.dachfenster))

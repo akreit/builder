@@ -33,7 +33,7 @@ application JAR with these resources; no Dockerfile change is necessary.
 ## Long PDFs: text extraction and multiple passes
 
 PDFs are no longer sent whole. `MultiPassOfferExtractor` reads the text layer
-with Apache PDFBox (`PdfText`), page by page, and sends it as `text` blocks
+with Apache PDFBox (`PdfText`, inside `IO.blocking`), page by page, and sends it as `text` blocks
 with `=== Seite n ===` markers so page references stay absolute.
 `PassBudget.default` sizes each pass:
 
@@ -52,9 +52,10 @@ line breaks into pieces that keep its page number. Passes run in parallel
 through `OfferPass.bounded` (2 concurrent Claude calls app-wide).
 
 `RawOfferMerge` combines the parts: contractor/dates from the first part that
-has them (disagreeing values become low-confidence notes), line items, notes
-and exclusions concatenated in page order, totals and VAT from the last part
-that has them, coverage per Leistung with the most specific status. If any
+has them, line items, notes and exclusions concatenated in page order (an
+identical item repeated on a page that was cut between two adjacent parts is
+kept once), totals and VAT from the last part that has them; disagreeing
+values of company, dates or totals become low-confidence notes. Coverage per Leistung with the most specific status. If any
 pass fails (e.g. `max_tokens`), the whole offer fails and the error names the
 part, so no page is silently dropped.
 

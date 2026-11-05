@@ -6,8 +6,12 @@ import builder.domain.Confidence
   *
   *   - contractor, date, validUntil: first non-empty value; a different value in a later part is
   *     kept as a low-confidence note, so conflicts stay visible.
-  *   - line items, notes, exclusions: concatenated in page order (identical notes once).
-  *   - net, VAT rate, VAT, gross: last non-empty value (totals are printed at the end).
+  *   - line items: concatenated in page order; where a page was cut into pieces of two adjacent
+  *     parts, an item identical (all fields and page) to one of the previous part on that shared
+  *     page is a repeat and kept once. Equal items on different pages are kept.
+  *   - notes, exclusions: concatenated in page order (identical ones once).
+  *   - net, VAT rate, VAT, gross: last non-empty value (totals are printed at the end); a different
+  *     value in an earlier part is kept as a low-confidence note.
   *   - new Leistungen: first proposal per key; coverage: per Leistung the most specific status.
   */
 object RawOfferMerge:
@@ -20,7 +24,7 @@ object RawOfferMerge:
           contractor = first(offers.map(_.contractor)),
           date = first(offers.map(_.date)),
           validUntil = first(offers.map(_.validUntil)),
-          lineItems = offers.flatMap(_.lineItems),
+          lineItems = lineItems(parts),
           net = last(offers.map(_.net)),
           vatRate = last(offers.map(_.vatRate)),
           vat = last(offers.map(_.vat)),
@@ -39,15 +43,31 @@ object RawOfferMerge:
 
   private def optional[A](as: List[A]): Option[List[A]] = Some(as).filter(_.nonEmpty)
 
-  private def conflicts(parts: List[(TextChunk, RawOffer)]): List[Field] =
-    List[(String, RawOffer => Field)](
-      "Firma" -> (_.contractor),
-      "Angebotsdatum" -> (_.date),
-      "Gültig bis" -> (_.validUntil)
-    ).flatMap((label, get) => conflictsOf(label, parts.map((c, o) => (c, get(o)))))
+  /** Which value of several parts is used. */
+  private enum Pick:
+    case First, Last
 
-  private def conflictsOf(label: String, fields: List[(TextChunk, Field)]): List[Field] =
-    first(fields.map(_._2)).text.toList.flatMap(chosen =>
+  private def conflicts(parts: List[(TextChunk, RawOffer)]): List[Field] =
+    List[(String, Pick, RawOffer => Field)](
+      ("Firma", Pick.First, _.contractor),
+      ("Angebotsdatum", Pick.First, _.date),
+      ("Gültig bis", Pick.First, _.validUntil),
+      ("Netto", Pick.Last, _.net),
+      ("MwSt.-Satz", Pick.Last, _.vatRate),
+      ("MwSt.", Pick.Last, _.vat),
+      ("Brutto", Pick.Last, _.gross)
+    ).flatMap((label, pick, get) => conflictsOf(label, pick, parts.map((c, o) => (c, get(o)))))
+
+  private def picked(pick: Pick, fields: List[Field]): Field = pick match
+    case Pick.First => first(fields)
+    case Pick.Last  => last(fields)
+
+  private def conflictsOf(
+      label: String,
+      pick: Pick,
+      fields: List[(TextChunk, Field)]
+  ): List[Field] =
+    picked(pick, fields.map(_._2)).text.toList.flatMap(chosen =>
       fields.collect {
         case (chunk, f) if f.text.exists(_ != chosen) =>
           Field(
@@ -74,3 +94,23 @@ object RawOfferMerge:
       .flatMap(_.minByOption(a => rank(a.status)))
       .toList
       .sortBy(a => entries.indexWhere(_.leistung == a.leistung))
+
+  /** Identity of a line item for repeat detection: every field's text and page. */
+  private def itemKey(item: RawLineItem): List[(Option[String], Option[Int])] =
+    item.labelled.map((_, f) => (f.text, f.page)) :+ ((item.leistung, None))
+
+  private def pagesOf(chunk: TextChunk): Set[Int] = chunk.pages.map(_.number).toSet
+
+  /** Line items in page order, dropping repeats on pages shared with the previous part. */
+  private def lineItems(parts: List[(TextChunk, RawOffer)]): List[RawLineItem] =
+    parts.headOption.toList.flatMap(_._2.lineItems) ++
+      parts.zip(parts.drop(1)).flatMap { case ((prevChunk, prev), (chunk, offer)) =>
+        val shared = pagesOf(prevChunk).intersect(pagesOf(chunk))
+        val seen = prev.lineItems
+          .filter(_.description.page.exists(shared.contains))
+          .map(itemKey)
+          .toSet
+        offer.lineItems.filterNot(li =>
+          li.description.page.exists(shared.contains) && seen.contains(itemKey(li))
+        )
+      }

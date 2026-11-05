@@ -21,11 +21,13 @@ final class MultiPassOfferExtractor(pass: OfferPass[IO], budget: PassBudget = Pa
       case OfferFileType.Jpeg | OfferFileType.Png =>
         pass.run(PassContent.Image(file, fileType), known)
       case OfferFileType.Pdf =>
-        PdfText.pages(file) match
+        // PDFBox parses synchronously and can take long on big files: off the compute pool.
+        IO.blocking(PdfText.pages(file)).flatMap {
           case Left(error)                             => IO.pure(Left(error))
           case Right(pages) if pages.forall(_.isBlank) =>
             pass.run(PassContent.ScannedPdf(file), known)
           case Right(pages) => passes(plan(pages, known), known)
+        }
 
   /** The chunks a PDF with these pages is read in. */
   def plan(pages: List[PdfPage], known: List[Leistung]): List[TextChunk] =
