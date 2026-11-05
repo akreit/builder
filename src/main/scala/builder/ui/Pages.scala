@@ -112,21 +112,17 @@ object Pages:
           )
     )
 
-  /** German status line for an accepted offer: net/VAT/gross always checked; position sum only when
-    * every position has a price.
+  /** German status line for an accepted offer. Position sum is mentioned only when every position
+    * has a price (`lineSumCheck` is defined); missing prices are normal — no extra warning.
     */
   private def acceptanceMessage(offer: Offer): String =
     val amountsOk = "Netto, MwSt. und Brutto stimmen überein"
     offer.lineSumCheck match
-      case LineSumCheck.Consistent =>
-        if offer.lineItems.isEmpty then s"Ausgelesen und geprüft: $amountsOk."
-        else s"Ausgelesen und geprüft: Positionen, $amountsOk."
-      case LineSumCheck.NotCheckable(n) =>
-        val pos =
-          if n == 1 then "bei 1 Position fehlt der Preis"
-          else s"bei $n Positionen fehlt der Preis"
-        s"Ausgelesen und geprüft: $amountsOk. Positionssumme nicht prüfbar: $pos."
-      case LineSumCheck.Mismatch(sum, net) =>
+      case Some(LineSumCheck.Consistent) if offer.lineItems.nonEmpty =>
+        s"Ausgelesen und geprüft: Positionen, $amountsOk."
+      case Some(LineSumCheck.Consistent) | None =>
+        s"Ausgelesen und geprüft: $amountsOk."
+      case Some(LineSumCheck.Mismatch(sum, net)) =>
         // Accepted offers cannot carry a mismatch (Offer.from rejects it); keep exhaustiveness.
         s"Ausgelesen und geprüft: $amountsOk. Positionssumme ${Format.money(sum)} ≠ Netto ${Format.money(net)}."
 

@@ -397,7 +397,7 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
       yield
         status shouldBe Status.Ok
         body should include("Ausgelesen und geprüft: Netto, MwSt. und Brutto stimmen überein.")
-        body should include("Positionssumme nicht prüfbar: bei 1 Position fehlt der Preis")
+        body should not include ("Positionssumme nicht prüfbar")
         body should not include ("Positionen, Netto, MwSt. und Brutto stimmen überein")
         body should include("Einbau ohne Preis/Menge")
         body should include("Menge fehlt")
