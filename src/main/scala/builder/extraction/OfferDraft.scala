@@ -44,18 +44,37 @@ object OfferDraft:
   private def optionalDate(label: String, f: Field): Checked[Option[Extracted[LocalDate]]] =
     f.text.traverse(s => date(label, s).map(extracted(f, _)))
 
+  /** Absent quantity → [[QuantityInfo.Missing]] (offer still accepted). Present but unreadable or
+    * invalid values are still reported as issues.
+    */
+  private def quantityInfo(label: String, f: Field): Checked[QuantityInfo] =
+    f.text match
+      case None    => Right(QuantityInfo.Missing)
+      case Some(s) =>
+        for
+          d <- decimal(label, s)
+          q <- domain(label, Quantity.from(d))
+        yield QuantityInfo.Known(extracted(f, q))
+
+  /** Absent amount → [[PriceInfo.Missing]] (offer still accepted). Present but unreadable or
+    * invalid values are still reported as issues.
+    */
+  private def priceInfo(label: String, f: Field, cur: Currency): Checked[PriceInfo] =
+    f.text match
+      case None    => Right(PriceInfo.Missing)
+      case Some(s) =>
+        for
+          d <- decimal(label, s)
+          m <- domain(label, Money.fromDecimal(d, cur).left.map(DomainError.InvalidMoney(_)))
+        yield PriceInfo.Known(extracted(f, m))
+
   private def lineItem(n: Int, li: RawLineItem, cur: Currency): Checked[LineItem] =
     val p = s"Position $n"
-    val quantity = for
-      s <- required(s"$p: Menge", li.quantity)
-      d <- decimal(s"$p: Menge", s)
-      q <- domain(s"$p: Menge", Quantity.from(d))
-    yield extracted(li.quantity, q)
     (
       required(s"$p: Beschreibung", li.description).map(extracted(li.description, _)),
-      quantity,
-      money(s"$p: Einzelpreis", li.unitPrice, cur),
-      money(s"$p: Gesamtpreis", li.total, cur)
+      quantityInfo(s"$p: Menge", li.quantity),
+      priceInfo(s"$p: Einzelpreis", li.unitPrice, cur),
+      priceInfo(s"$p: Gesamtpreis", li.total, cur)
     ).parTupled.flatMap((d, q, up, t) =>
       domain(
         p,

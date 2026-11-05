@@ -69,48 +69,74 @@ final case class WorkPackage(category: CategoryId, description: String, areas: L
 
 final case class Contractor(name: String)
 
-/** One offer position whose total is `round_HALF_UP(unitPrice * quantity)` in minor units. Only
-  * [[LineItem.from]] builds one. Negative unit prices are allowed (discount lines).
+/** Quantity of a line item: known from the document, or missing (offer may still be accepted). */
+enum QuantityInfo:
+  case Known(value: Extracted[Quantity])
+  case Missing
+
+/** Unit price or line total: known from the document, or missing (offer may still be accepted). */
+enum PriceInfo:
+  case Known(value: Extracted[Money])
+  case Missing
+
+/** One offer position. Only [[LineItem.from]] builds one.
+  *
+  * When quantity, unit price and total are all [[PriceInfo.Known]] / [[QuantityInfo.Known]], the
+  * total must equal `round_HALF_UP(unitPrice × quantity)` in minor units. Negative unit prices are
+  * allowed (discount lines). Quantity or price may be [[QuantityInfo.Missing]] /
+  * [[PriceInfo.Missing]]; such positions are accepted, shown empty and flagged in the UI, and
+  * excluded from per-Leistung sums (the offer's net/gross still count for totals and ranking).
   */
 final case class LineItem private (
     description: Extracted[String],
-    quantity: Extracted[Quantity],
+    quantity: QuantityInfo,
     unit: Option[Extracted[String]],
     sizes: Option[Extracted[String]],
     manufacturer: Option[Extracted[String]],
     model: Option[Extracted[String]],
-    unitPrice: Extracted[Money],
-    total: Extracted[Money]
+    unitPrice: PriceInfo,
+    total: PriceInfo
 )
 
 object LineItem:
   def from(
       description: Extracted[String],
-      quantity: Extracted[Quantity],
+      quantity: QuantityInfo,
       unit: Option[Extracted[String]],
       sizes: Option[Extracted[String]],
       manufacturer: Option[Extracted[String]],
       model: Option[Extracted[String]],
-      unitPrice: Extracted[Money],
-      total: Extracted[Money]
+      unitPrice: PriceInfo,
+      total: PriceInfo
   ): Either[DomainError, LineItem] =
-    val price = unitPrice.value
-    val t = total.value
-    val expected = price.times(quantity.value.value)
-    for
-      _ <- Either.cond(
-        price.currency == t.currency,
-        (),
-        DomainError.InvalidMoney(MoneyError.CurrencyMismatch(price.currency, t.currency))
-      )
-      _ <- Either.cond(expected == t, (), DomainError.LineItemTotalMismatch(expected, t))
-    yield LineItem(description, quantity, unit, sizes, manufacturer, model, unitPrice, total)
+    val checked = (unitPrice, total, quantity) match
+      case (PriceInfo.Known(up), PriceInfo.Known(t), qty) =>
+        val price = up.value
+        val tot = t.value
+        for
+          _ <- Either.cond(
+            price.currency == tot.currency,
+            (),
+            DomainError.InvalidMoney(MoneyError.CurrencyMismatch(price.currency, tot.currency))
+          )
+          _ <- qty match
+            case QuantityInfo.Known(q) =>
+              val expected = price.times(q.value.value)
+              Either.cond(expected == tot, (), DomainError.LineItemTotalMismatch(expected, tot))
+            case QuantityInfo.Missing => Right(())
+        yield ()
+      case (PriceInfo.Missing, _, _) | (_, PriceInfo.Missing, _) => Right(())
+    checked.map(_ =>
+      LineItem(description, quantity, unit, sizes, manufacturer, model, unitPrice, total)
+    )
 
 /** A contractor offer whose amounts are known to be consistent. Only [[Offer.from]] builds one.
   *
   * Sign rules: `net`, `vat` and `gross` must be non-negative. Individual line items MAY be
-  * negative, so that discount lines (e.g. "Rabatt") can be represented; they still have to sum to
-  * `net`. An offer without line items (Pauschalangebot, lump-sum offer) skips the line-sum check.
+  * negative, so that discount lines (e.g. "Rabatt") can be represented. When every line item has a
+  * known total, those totals must sum to `net`; if any total is [[PriceInfo.Missing]], the line-sum
+  * check is skipped and the offer is still accepted (totals/ranking use net/gross). An offer
+  * without line items (Pauschalangebot, lump-sum offer) also skips the line-sum check.
   */
 final case class Offer private (
     id: OfferId,
@@ -126,10 +152,12 @@ final case class Offer private (
     notes: List[String],
     exclusions: List[String]
 ):
-  /** Every amount on the offer, for currency checks. */
+  /** Every known amount on the offer, for currency checks (missing line prices omitted). */
   def amounts: List[Money] =
     List(net.value, vat.value, gross.value) ++
-      lineItems.flatMap(li => List(li.unitPrice.value, li.total.value))
+      lineItems.flatMap(li =>
+        List(li.unitPrice, li.total).collect { case PriceInfo.Known(e) => e.value }
+      )
 
 object Offer:
   private def nonNegative(field: String, m: Money): Either[DomainError, Money] =
@@ -139,14 +167,19 @@ object Offer:
     lineItems match
       case Nil              => Right(()) // Pauschalangebot: only the lump sum is given
       case items @ (_ :: _) =>
-        Money
-          .sum(n.currency, items.map(_.total.value))
-          .left
-          .map(DomainError.InvalidMoney(_))
-          .flatMap(sum => Either.cond(sum == n, (), DomainError.LineItemsMismatch(sum, n)))
+        val totals = items.map(_.total match
+          case PriceInfo.Known(e) => Some(e.value)
+          case PriceInfo.Missing  => None)
+        if totals.exists(_.isEmpty) then Right(()) // incomplete positions: skip sum check
+        else
+          Money
+            .sum(n.currency, totals.flatten)
+            .left
+            .map(DomainError.InvalidMoney(_))
+            .flatMap(sum => Either.cond(sum == n, (), DomainError.LineItemsMismatch(sum, n)))
 
-  /** Validates sign rules, `gross == net + vat`, `vat == round_HALF_UP(net * rate)` and, if there
-    * are line items, that their totals sum to `net`.
+  /** Validates sign rules, `gross == net + vat`, `vat == round_HALF_UP(net * rate)` and, when every
+    * line item has a known total, that those totals sum to `net`.
     */
   def from(
       id: OfferId,
