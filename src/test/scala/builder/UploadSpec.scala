@@ -152,6 +152,110 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
     )
   }
 
+  "uploading the same firm again in the same category overwrites the existing offer" in {
+    val updated = dachfenster.copy(
+      net = f("6000.00", 3),
+      vat = f("1140.00", 3),
+      gross = f("7140.00", 3),
+      lineItems = List(item("Dachfenster liefern", "3", "Stk", "2000.00", "6000.00"))
+    )
+    TestApp.fresh(RecordingExtractor(List(dachfenster, updated))).use { app =>
+      for
+        (st1, body1) <- upload(app, pdf, "alt.pdf")
+        id1 <- IO.pure {
+          val m = """data-upload="([^"]+)"""".r.findFirstMatchIn(body1).map(_.group(1))
+          m.getOrElse("")
+        }
+        (st2, body2) <- upload(app, pdf, "neu.pdf")
+        after <- net(app)
+        files <- storedFiles(app)
+      yield
+        st1 shouldBe Status.Ok
+        st2 shouldBe Status.Ok
+        body1 should include("Zimmerei Erfunden GmbH")
+        body2 should include("Zimmerei Erfunden GmbH")
+        body2 should include("neu.pdf")
+        body2 should include("6.000,00")
+        // Still a single upload of that firm; the old file name is gone.
+        body2 should not include ("alt.pdf")
+        """data-upload="""".r.findAllIn(body2).size shouldBe 1
+        body2 should include(s"""data-upload="$id1"""")
+        // Only offer in Fenster: counts the new net.
+        after shouldBe "27118.50"
+        files.count(_.endsWith(".pdf")) shouldBe 1
+    }
+  }
+
+  "the same firm in a different category creates a new offer" in {
+    def page(app: TestApp, category: String): IO[String] =
+      app.http
+        .run(Request[IO](Method.GET, Uri.unsafeFromString(s"/projekte/demo/kategorien/$category")))
+        .flatMap(_.bodyText.compile.string)
+    TestApp.fresh(FakeExtractor(Right(dachfenster))).use { app =>
+      for
+        (st1, body1) <- upload(app, pdf, category = "fenster")
+        (st2, body2) <- upload(app, pdf, category = "dach")
+        fensterPage <- page(app, "fenster")
+        dachPage <- page(app, "dach")
+        fensterIds = """data-upload="([^"]+)"""".r.findAllMatchIn(fensterPage).map(_.group(1)).toSet
+        dachIds = """data-upload="([^"]+)"""".r.findAllMatchIn(dachPage).map(_.group(1)).toSet
+      yield
+        st1 shouldBe Status.Ok
+        st2 shouldBe Status.Ok
+        body1 should include("Zimmerei Erfunden GmbH")
+        body2 should include("Zimmerei Erfunden GmbH")
+        fensterIds.size shouldBe 1
+        dachIds.size shouldBe 1
+        fensterIds.intersect(dachIds) shouldBe empty
+    }
+  }
+
+  "a different firm in the same category creates a new offer" in {
+    val other = dachfenster.copy(contractor = f("Dachbau Phantasie OHG"))
+    TestApp.fresh(RecordingExtractor(List(dachfenster, other))).use { app =>
+      for
+        (_, body1) <- upload(app, pdf)
+        (_, body2) <- upload(app, pdf)
+      yield
+        body2 should include("Zimmerei Erfunden GmbH")
+        body2 should include("Dachbau Phantasie OHG")
+        """data-upload="""".r.findAllIn(body2).size shouldBe 2
+        body1 should include("Zimmerei Erfunden GmbH")
+    }
+  }
+
+  "same firm ignoring case and spaces overwrites; favorite keeps the offer id" in {
+    val sameFirm = dachfenster.copy(
+      contractor = f("  zimmerei   ERFUNDEN gmbh "),
+      net = f("5500.00", 3),
+      vat = f("1045.00", 3),
+      gross = f("6545.00", 3),
+      lineItems = List(item("Dachfenster liefern", "2", "Stk", "2750.00", "5500.00"))
+    )
+    def favorite(app: TestApp, offer: String) = app.http.run(
+      Request[IO](
+        Method.POST,
+        Uri.unsafeFromString(s"/ui/projects/demo/categories/fenster/favorite/$offer")
+      ).putHeaders("HX-Request" -> "true")
+    )
+    TestApp.fresh(RecordingExtractor(List(dachfenster, sameFirm))).use { app =>
+      for
+        (_, body1) <- upload(app, pdf)
+        offerId <- IO.pure(
+          """data-upload="([^"]+)"""".r.findFirstMatchIn(body1).map(_.group(1)).getOrElse("")
+        )
+        _ <- favorite(app, offerId)
+        (_, body2) <- upload(app, pdf, "ersetzt.pdf")
+        after <- net(app)
+      yield
+        body2 should include(s"""data-upload="$offerId"""")
+        """data-upload="""".r.findAllIn(body2).size shouldBe 1
+        body2 should include("Favorit")
+        body2 should include("ersetzt.pdf")
+        after shouldBe "26618.50"
+    }
+  }
+
   private def storedFiles(app: TestApp): IO[List[String]] =
     IO.blocking {
       val dir = app.dir.resolve("angebote")
@@ -260,10 +364,11 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
   }
 
   "a restart applies no migration twice and keeps all rows" in {
+    val other = dachfenster.copy(contractor = f("Andere Fensterbau KG"))
     TestApp.tempDir.use(dir =>
       for
         _ <- TestApp.resource(dir, FakeExtractor(Right(dachfenster))).use(app => upload(app, pdf))
-        _ <- TestApp.resource(dir, FakeExtractor(Right(dachfenster))).use(app => upload(app, pdf))
+        _ <- TestApp.resource(dir, FakeExtractor(Right(other))).use(app => upload(app, pdf))
         versions <- TestDb.ints(dir, "SELECT version FROM schema_migrations ORDER BY version")
         uploads <- uploadRows(dir)
       yield
@@ -333,7 +438,8 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
           yield (savedWhileReading.size, files, rows)
         }
       )
-    yield result shouldBe (1, Nil, 0)
+    // Reading runs before the file is stored, so a cancel mid-read never leaves a file.
+    yield result shouldBe (0, Nil, 0)
   }
 
   "when the row cannot be inserted, the saved file is deleted" in {

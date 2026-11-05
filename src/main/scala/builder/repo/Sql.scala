@@ -83,6 +83,38 @@ private[repo] object Sql:
           VALUES ($text, $text, $text, $text, $text, $timestamptz, ${text.opt}, ${int4.opt},
             ${text.opt})""".command
 
+  /** (project, id, category, file name, file type, created, extraction, version, failure) */
+  val updateUpload: Command[
+    (
+        String,
+        String,
+        String,
+        String,
+        String,
+        OffsetDateTime,
+        Option[String],
+        Option[Int],
+        Option[String]
+    )
+  ] =
+    sql"""UPDATE uploads SET category_id = $text, file_name = $text, file_type = $text,
+            created_at = $timestamptz, extraction = ${text.opt}, extraction_version = ${int4.opt},
+            failure = ${text.opt}
+          WHERE project_id = $text AND id = $text""".command
+      .contramap((p, i, c, n, t, at, e, v, f) => (c, n, t, at, e, v, f, p, i))
+
+  /** (project, offer): extracted item mappings only; manual assignments stay. */
+  val deleteReadOfferItems: Command[(String, String)] =
+    sql"DELETE FROM item_leistung WHERE project_id = $text AND offer_id = $text AND NOT manual".command
+
+  /** (project, offer): extracted coverage only; manual statuses stay. */
+  val deleteReadOfferCoverage: Command[(String, String)] =
+    sql"DELETE FROM abdeckung WHERE project_id = $text AND offer_id = $text AND NOT manual".command
+
+  /** (project, offer); cascades to uploads, favorites, item mappings and coverage. */
+  val deleteOffer: Command[(String, String)] =
+    sql"DELETE FROM offers WHERE project_id = $text AND id = $text".command
+
   /** (project, id, category, name), appended after the last position of the project. */
   val insertLeistung: Command[(String, String, String, String)] =
     sql"""INSERT INTO leistungen(project_id, id, category_id, name, position, deleted)

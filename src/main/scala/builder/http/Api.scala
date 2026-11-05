@@ -495,40 +495,49 @@ final class Api(
             newOfferId.flatMap {
               case Left(e) =>
                 IO.pure(Left(fragmentError(StatusCode.InternalServerError, Pages.describe(e))))
-              case Right(id) =>
+              case Right(freshId) =>
                 val name = fileName.getOrElse(s"angebot.${fileType.extension}")
-                val upload = files.save(id, fileType, bytes) >>
-                  extractor
-                    .extract(bytes, fileType, known)
-                    .flatMap(extracted =>
-                      Clock[IO].realTimeInstant.map(now =>
-                        Upload(
-                          id,
-                          c,
-                          name,
-                          fileType,
-                          now,
-                          extracted.fold(
-                            e => UploadOutcome.Failed(Pages.describe(e)),
-                            UploadOutcome.Read(_)
-                          )
-                        )
+                // Read first so same firm + category can reuse the existing offer id; only then
+                // save the file under that id. Cancellation during reading leaves no file.
+                val read = extractor
+                  .extract(bytes, fileType, known)
+                  .flatMap(extracted =>
+                    Clock[IO].realTimeInstant.map { now =>
+                      val outcome = extracted.fold(
+                        e => UploadOutcome.Failed(Pages.describe(e)),
+                        UploadOutcome.Read(_)
                       )
-                    )
-                // Saving and reading may be cancelled (then the file goes); once read, the row
-                // is written without interruption and the file is deleted only if that failed.
-                IO.uncancelable(poll =>
-                  poll(upload)
-                    .guaranteeCase {
-                      case Outcome.Succeeded(_)                    => IO.unit
-                      case Outcome.Errored(_) | Outcome.Canceled() => files.delete(id, fileType)
+                      val draft = Upload(freshId, c, name, fileType, now, outcome)
+                      val keep = UploadReplace.kept(v, draft)
+                      val gone = UploadReplace.obsolete(v, draft)
+                      (draft.copy(id = keep), gone)
                     }
-                    .flatMap(u =>
-                      repo
-                        .addUpload(p, u)
-                        .onError(_ => files.delete(id, fileType))
-                        .flatTap(_.fold(_ => files.delete(id, fileType), _ => IO.unit))
-                    )
+                  )
+                IO.uncancelable(poll =>
+                  poll(read).flatMap { (u, gone) =>
+                    val replacing = v.uploads.exists(_.upload.id == u.id)
+                    poll(files.save(u.id, fileType, bytes))
+                      .guaranteeCase {
+                        case Outcome.Succeeded(_)                    => IO.unit
+                        case Outcome.Errored(_) | Outcome.Canceled() =>
+                          // New offer: drop the partial file. Replace: leave whatever was on disk.
+                          if replacing then IO.unit else files.delete(u.id, fileType)
+                      }
+                      .flatMap(_ =>
+                        repo
+                          .addUpload(p, u)
+                          .flatTap {
+                            case Left(_) =>
+                              if replacing then IO.unit else files.delete(u.id, fileType)
+                            case Right(()) =>
+                              // Drop superseded same-firm files and a previous extension of this id.
+                              gone.traverse_(g => files.deleteAll(g.id)) >>
+                                OfferFileType.values.toList
+                                  .filterNot(_ == fileType)
+                                  .traverse_(ft => files.delete(u.id, ft))
+                          }
+                      )
+                  }
                 ).flatMap {
                   case Left(e)   => IO.pure(Left(repoError(e)))
                   case Right(()) =>

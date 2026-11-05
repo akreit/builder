@@ -111,8 +111,10 @@ trait ProjectRepository:
       offer: OfferId
   ): IO[Either[RepoError, ProjectView]]
 
-  /** Stores an uploaded offer of `id`; it is validated (and counted if valid) on every read.
-    * `Right` means the row is committed.
+  /** Stores an uploaded offer of `id`; it is validated (and counted if valid) on every read. When
+    * the project already has an upload of the same firm in the same category, that row is replaced
+    * in place (same offer id) rather than creating a second offer. `Right` means the row is
+    * committed.
     */
   def addUpload(id: ProjectId, upload: Upload): IO[Either[RepoError, Unit]]
 
@@ -316,21 +318,27 @@ final class PostgresProjectRepository private (
         case Right(v) if !v.project.categories.exists(_.id == upload.category) =>
           IO.pure(Left(RepoError.CategoryNotFound(upload.category)))
         case Right(v) =>
-          val (extraction, version, failure) = upload.outcome match
+          val keep = UploadReplace.kept(v, upload)
+          val effective = upload.copy(id = keep)
+          val obsolete = UploadReplace.obsolete(v, upload).map(_.id)
+          val (extraction, version, failure) = effective.outcome match
             case UploadOutcome.Read(raw) =>
               (Some(raw.asJson.noSpaces), Some(ExtractionVersion), None)
             case UploadOutcome.Failed(m) => (None, None, Some(m))
-          val proposed = upload.outcome match
+          val proposed = effective.outcome match
             case UploadOutcome.Read(raw) => LeistungPlan.proposals(raw).size
             case UploadOutcome.Failed(_) => 0
+          val replacing = v.uploads.exists(_.upload.id == keep)
           freshIds("l", proposed).flatMap(ids =>
             db.transact(
-              uploadStatements(id, upload, extraction, version, failure) ++
-                (upload.outcome match
+              favoriteRetarget(id, v, upload.category, keep, obsolete) ++
+                obsolete.map(o => Stmt(Sql.deleteOffer, (id.value, o.value))) ++
+                uploadStatements(id, effective, extraction, version, failure, replacing) ++
+                (effective.outcome match
                   case UploadOutcome.Read(raw) =>
                     planStatements(
                       id,
-                      upload.id,
+                      keep,
                       LeistungPlan.plan(
                         raw,
                         upload.category,
@@ -344,30 +352,49 @@ final class PostgresProjectRepository private (
       }
     )
 
+  /** When a favorite pointed at an offer we are about to delete, point it at the kept one. */
+  private def favoriteRetarget(
+      id: ProjectId,
+      view: ProjectView,
+      category: CategoryId,
+      keep: OfferId,
+      obsolete: List[OfferId]
+  ): List[Stmt[?]] =
+    view.project.favorites.get(category) match
+      case Some(fav) if obsolete.contains(fav) =>
+        List(Stmt(Sql.upsertFavorite, (id.value, category.value, keep.value)))
+      case _ => Nil
+
   private def uploadStatements(
       id: ProjectId,
       upload: Upload,
       extraction: Option[String],
       version: Option[Int],
-      failure: Option[String]
+      failure: Option[String],
+      replacing: Boolean
   ): List[Stmt[?]] =
-    List(
-      Stmt(Sql.insertOffer, (id.value, upload.id.value)),
-      Stmt(
-        Sql.insertUpload,
-        (
-          id.value,
-          upload.id.value,
-          upload.category.value,
-          upload.fileName,
-          upload.fileType.extension,
-          upload.createdAt.atOffset(ZoneOffset.UTC),
-          extraction,
-          version,
-          failure
-        )
-      )
+    val row = (
+      id.value,
+      upload.id.value,
+      upload.category.value,
+      upload.fileName,
+      upload.fileType.extension,
+      upload.createdAt.atOffset(ZoneOffset.UTC),
+      extraction,
+      version,
+      failure
     )
+    if replacing then
+      List(
+        Stmt(Sql.deleteReadOfferItems, (id.value, upload.id.value)),
+        Stmt(Sql.deleteReadOfferCoverage, (id.value, upload.id.value)),
+        Stmt(Sql.updateUpload, row)
+      )
+    else
+      List(
+        Stmt(Sql.insertOffer, (id.value, upload.id.value)),
+        Stmt(Sql.insertUpload, row)
+      )
 
   private def freshIds(prefix: String, n: Int): IO[List[LeistungId]] =
     List
@@ -542,6 +569,43 @@ final class PostgresProjectRepository private (
           case Some(c) =>
             List(Stmt(Sql.upsertManualCoverage, (p, o.value, l.value, Coverage.code(c))))
           case None => List(Stmt(Sql.deleteManualCoverage, (p, o.value, l.value)))
+
+/** Same firm in the same category: normalised contractor name via [[ContractorKey]]. */
+object UploadReplace:
+  def keyOf(raw: RawOffer): Option[ContractorKey] =
+    raw.contractor.text.flatMap(ContractorKey.of)
+
+  def keyOf(outcome: UploadOutcome): Option[ContractorKey] = outcome match
+    case UploadOutcome.Read(raw) => keyOf(raw)
+    case UploadOutcome.Failed(_) => None
+
+  def keyOf(status: UploadStatus): Option[ContractorKey] = status match
+    case UploadStatus.Accepted(raw, _)    => keyOf(raw)
+    case UploadStatus.Rejected(raw, _)    => keyOf(raw)
+    case UploadStatus.ExtractionFailed(_) => None
+
+  /** Uploads of `category` whose firm matches `key`, in load order (oldest first). */
+  def sameFirm(
+      view: ProjectView,
+      category: CategoryId,
+      key: Option[ContractorKey]
+  ): List[Upload] =
+    key.toList.flatMap(k =>
+      view.uploads.collect {
+        case UploadView(u, s) if u.category == category && keyOf(s).contains(k) => u
+      }
+    )
+
+  /** Offer id to keep: the oldest same-firm upload in the category, else the upload's own id. */
+  def kept(view: ProjectView, upload: Upload): OfferId =
+    sameFirm(view, upload.category, keyOf(upload.outcome)).headOption
+      .map(_.id)
+      .getOrElse(upload.id)
+
+  /** Same-firm uploads in the category other than [[kept]], whose files and rows go away. */
+  def obsolete(view: ProjectView, upload: Upload): List[Upload] =
+    val keep = kept(view, upload)
+    sameFirm(view, upload.category, keyOf(upload.outcome)).filterNot(_.id == keep)
 
 object PostgresProjectRepository:
   /** Version of the [[RawOffer]] JSON written to `uploads.extraction`. Version 2 added the optional

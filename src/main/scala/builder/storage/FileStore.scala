@@ -3,6 +3,7 @@ package builder.storage
 import builder.domain.OfferId
 import builder.extraction.OfferFileType
 import cats.effect.IO
+import cats.syntax.all.*
 
 import java.nio.file.Files
 import java.nio.file.Path
@@ -21,3 +22,7 @@ final class FileStore(dir: Path):
   /** Removes the file of an upload that was not stored; a missing file is fine. */
   def delete(id: OfferId, fileType: OfferFileType): IO[Unit] =
     IO.blocking(Files.deleteIfExists(path(id, fileType))).void
+
+  /** Removes every stored extension of `id` (e.g. after a replace with a different file type). */
+  def deleteAll(id: OfferId): IO[Unit] =
+    OfferFileType.values.toList.traverse_(ft => delete(id, ft))
