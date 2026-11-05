@@ -22,7 +22,7 @@ sbt run          # start the HTTP server (port 8080, override with PORT=...)
 ```sh
 curl http://localhost:8080/health
 curl http://localhost:8080/health
-curl -i http://localhost:8080/       # 404 bei leerer Datenbank
+curl -i http://localhost:8080/       # leeres Standardprojekt „default“ (200)
 ```
 
 ## Lokal mit Docker starten
