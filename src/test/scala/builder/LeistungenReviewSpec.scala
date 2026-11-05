@@ -204,6 +204,21 @@ class LeistungenReviewSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers 
     }
   }
 
+  "a column with a missing position price is not flagged as differing from net" in {
+    val incomplete = dachfensterMitLeistungen.copy(
+      lineItems = List(
+        dachfensterMitLeistungen.lineItems(0).copy(unitPrice = absent, total = absent),
+        dachfensterMitLeistungen.lineItems(1)
+      )
+    )
+    TestApp.fresh(RecordingExtractor(List(incomplete))).use { app =>
+      upload(app, "fenster").map { (_, html) =>
+        mismatches(html) shouldBe List("false")
+        html should not include ("Weicht vom Netto ab")
+      }
+    }
+  }
+
   "the UI warns when proposals beyond the cap were dropped" in {
     val many = (1 to 13).toList.map(i => RawNeueLeistung(s"neu-$i", s"Leistung $i"))
     TestApp.fresh(RecordingExtractor(List(dachfenster.copy(neueLeistungen = Some(many))))).use {

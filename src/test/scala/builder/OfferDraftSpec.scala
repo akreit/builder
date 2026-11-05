@@ -21,7 +21,9 @@ class OfferDraftSpec extends AnyFreeSpec with Matchers with EitherValues:
   "a consistent extraction becomes an Offer that keeps pages and confidence" in {
     val offer = validate(dachfenster).value
     offer.net.value shouldBe Money.ofMinor(501_000, Currency.EUR)
-    offer.lineItems.map(_.total.value.show) shouldBe List("3750.00", "1260.00")
+    offer.lineItems.map(_.total).collect { case PriceInfo.Known(e) =>
+      e.value.show
+    } shouldBe List("3750.00", "1260.00")
     offer.lineItems.headOption.flatMap(_.model).map(_.confidence) shouldBe Some(Confidence.Low)
     offer.net.page.map(_.value) shouldBe Some(3)
     offer.exclusions shouldBe List("Innenfutter")
@@ -60,4 +62,48 @@ class OfferDraftSpec extends AnyFreeSpec with Matchers with EitherValues:
 
   "low-confidence fields are listed by German label" in {
     dachfenster.lowConfidenceFields shouldBe List("Position 1: Modell")
+  }
+
+  "an offer with a line item missing price and quantity is accepted" in {
+    val raw = dachfenster.copy(
+      lineItems = List(
+        item("Dachfenster liefern", "3", "Stk", "1250.00", "3750.00"),
+        RawLineItem(
+          f("Einbau ohne Mengen/Preise", 2),
+          absent,
+          f("Stk", 2),
+          absent,
+          absent,
+          absent,
+          absent,
+          absent
+        )
+      )
+    )
+    val offer = validate(raw).value
+    offer.lineItems.size shouldBe 2
+    offer.lineItems.lift(1).map(_.quantity) shouldBe Some(QuantityInfo.Missing)
+    offer.lineItems.lift(1).map(_.unitPrice) shouldBe Some(PriceInfo.Missing)
+    offer.lineItems.lift(1).map(_.total) shouldBe Some(PriceInfo.Missing)
+    offer.net.value shouldBe Money.ofMinor(501_000, Currency.EUR)
+  }
+
+  "a fully absent line quantity/price does not produce Missing issues" in {
+    val raw = dachfenster.copy(lineItems =
+      List(
+        RawLineItem(
+          f("Nur Beschreibung"),
+          absent,
+          absent,
+          absent,
+          absent,
+          absent,
+          absent,
+          absent
+        )
+      )
+    )
+    // Offer-level amounts still required and consistent; line-sum skipped.
+    val ok = raw.copy(net = f("100.00", 3), vat = f("19.00", 3), gross = f("119.00", 3))
+    validate(ok).isRight shouldBe true
   }

@@ -1,0 +1,2 @@
+src/main/resources/prompts/*.md text eol=lf
+src/test/resources/prompts/invalid-utf8.md binary

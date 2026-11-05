@@ -20,13 +20,13 @@ object SampleData:
       .flatMap(q =>
         LineItem.from(
           description = ex(pos.description),
-          quantity = ex(q),
+          quantity = QuantityInfo.Known(ex(q)),
           unit = Some(ex(pos.unit)),
           sizes = None,
           manufacturer = None,
           model = None,
-          unitPrice = ex(price),
-          total = ex(price.times(q.value))
+          unitPrice = PriceInfo.Known(ex(price)),
+          total = PriceInfo.Known(ex(price.times(q.value)))
         )
       )
 
@@ -49,7 +49,17 @@ object SampleData:
       items <- positions.foldRight[Either[DomainError, List[LineItem]]](Right(Nil))((p, acc) =>
         acc.flatMap(rest => lineItem(p, pg).map(_ :: rest))
       )
-      net <- Money.sum(eur, items.map(_.total.value)).left.map(DomainError.InvalidMoney(_))
+      net <- Money
+        .sum(
+          eur,
+          items.flatMap(li =>
+            li.total match
+              case PriceInfo.Known(e) => List(e.value)
+              case PriceInfo.Missing  => Nil
+          )
+        )
+        .left
+        .map(DomainError.InvalidMoney(_))
       netOrLump = if items.isEmpty then Money.ofMinor(lumpSumCents, eur) else net
       vat = rate.vatOn(netOrLump)
       gross <- netOrLump.plus(vat).left.map(DomainError.InvalidMoney(_))

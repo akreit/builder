@@ -25,13 +25,13 @@ object Fixtures extends EitherValues:
     LineItem
       .from(
         description = Extracted.manual(description),
-        quantity = Extracted.manual(Quantity.from(1).value),
+        quantity = QuantityInfo.Known(Extracted.manual(Quantity.from(1).value)),
         unit = None,
         sizes = None,
         manufacturer = None,
         model = None,
-        unitPrice = Extracted.manual(total),
-        total = Extracted.manual(total)
+        unitPrice = PriceInfo.Known(Extracted.manual(total)),
+        total = PriceInfo.Known(Extracted.manual(total))
       )
       .value
 

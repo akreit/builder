@@ -39,7 +39,7 @@ final case class MatrixRow(leistung: Leistung, cells: List[Cell])
 final case class Unassigned(offer: OfferId, item: Int, description: String)
 
 /** Check sum of one column: cell prices plus unassigned items, compared with the offer's net.
-  * `None` where a price is unreadable.
+  * `None` where a price is unreadable / missing.
   */
 final case class ColumnTotal(cells: Option[Money], unassigned: Option[Money], net: Option[Money]):
   def sum: Option[Money] =
@@ -47,8 +47,12 @@ final case class ColumnTotal(cells: Option[Money], unassigned: Option[Money], ne
       case (Some(c), Some(u))                               => c.plus(u).toOption
       case (Some(_), None) | (None, Some(_)) | (None, None) => None
 
-  /** The items do not add up to the stated net (or one side cannot be read). */
-  def mismatch: Boolean = sum.isEmpty || net.isEmpty || sum != net
+  /** True only when every price in the column is known and that sum differs from net. Missing
+    * prices are not a mismatch (no footer hint).
+    */
+  def mismatch: Boolean = (sum, net) match
+    case (Some(s), Some(n))                               => s != n
+    case (None, None) | (None, Some(_)) | (Some(_), None) => false
 
 /** Leistungen (rows) × read offers (columns) of one category; `totals` and `dropped` (proposals cut
   * by [[builder.extraction.LeistungPlan.MaxNew]]) are per column.
