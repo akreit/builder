@@ -5,11 +5,14 @@ import builder.extraction.*
 import builder.repo.*
 import builder.ui.Format
 import builder.ui.common.Htmx.*
-import scalatags.Text.TypedTag
+import builder.ui.offer.OfferDetail
 import scalatags.Text.all.*
 import scalatags.Text.tags2
 
-/** The Leistungen matrix of a category and its edit controls. */
+/** The Leistungen matrix of a category and its edit controls. Cells that map line items show those
+  * positions in place as a native `<details>` block (collapsed by default), reusing
+  * [[OfferDetail.collapsiblePositions]].
+  */
 object LeistungenMatrix:
   private[ui] def coverageLabel(c: Coverage): String = c match
     case Coverage.Enthalten      => "enthalten"
@@ -32,6 +35,29 @@ object LeistungenMatrix:
     case CoverageSource.Unknown   => "nicht erkannt"
   private[ui] def columnTitle(c: MatrixColumn): String =
     c.raw.contractor.value.filter(_.trim.nonEmpty).getOrElse(c.upload.upload.fileName)
+
+  /** German summary for the cell's position toggle ("1 Position" / "N Positionen"). */
+  private[ui] def positionsSummaryLabel(count: Int): String =
+    if count == 1 then "1 Position" else s"$count Positionen"
+
+  /** Line items of `col` that this cell maps, in index order, for in-cell display. */
+  private[ui] def cellLineItems(col: MatrixColumn, c: Cell): List[(Int, RawLineItem)] =
+    c.items.flatMap(i => col.raw.lineItems.lift(i).map(li => i -> li))
+
+  /** Collapsible block of the cell's mapped positions; empty when the cell has none. Collapsed by
+    * default (`<details>` without `open`). Missing Menge/Preis show only the per-position flags —
+    * no extra consistency warning.
+    */
+  private[ui] def cellPositions(col: MatrixColumn, c: Cell, cur: Currency): Frag =
+    val items = cellLineItems(col, c)
+    items match
+      case Nil => frag()
+      case all =>
+        tag("details")(cls := "zellen-positionen")(
+          tag("summary")(positionsSummaryLabel(all.size)),
+          OfferDetail.collapsiblePositions(all, cur)
+        )
+
   private[ui] def matrixCell(project: Project, col: MatrixColumn, l: Leistung, c: Cell): Frag =
     val chosen = c.source match
       case CoverageSource.Manual => Coverage.code(c.coverage)
@@ -50,6 +76,7 @@ object LeistungenMatrix:
         sourceText(c.source) + (if c.items.isEmpty then ""
                                 else s" · Pos. ${c.items.map(_ + 1).mkString(", ")}")
       ),
+      cellPositions(col, c, project.currency),
       editForm(
         project,
         List(

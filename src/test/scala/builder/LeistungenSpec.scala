@@ -220,6 +220,61 @@ class LeistungenSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with E
     }
   }
 
+  "the matrix shows each cell's mapped positions collapsed inside the table" in {
+    TestApp.fresh(RecordingExtractor(List(dachfensterMitLeistungen))).use { app =>
+      upload(app).map { (st, html) =>
+        st shouldBe Status.Ok
+        // Slice to the Leistungsvergleich table so upload-detail positions do not count.
+        val matrix = html
+          .split("""class="leistungen"""", 2)
+          .lift(1)
+          .getOrElse("")
+          .split("""class="zuordnung"""", 2)
+          .headOption
+          .getOrElse("")
+        matrix should include("""class="zellen-positionen"""")
+        matrix should include("Dachfenster liefern")
+        matrix should include("Einbau inkl. Eindeckrahmen")
+        matrix should include("1 Position")
+        // Collapsed by default: no open attribute on the cell toggle or nested positions.
+        matrix should not include ("""class="zellen-positionen" open""")
+        matrix should not include ("""class="position" open""")
+        // Sums and ranking inputs stay as before.
+        html should include("5.010,00")
+        html should include("""data-abweichung="false"""")
+        html should not include ("Weicht vom Netto ab")
+      }
+    }
+  }
+
+  "missing Menge/Preis on a mapped position shows only the per-position flags in the matrix" in {
+    val incomplete = dachfensterMitLeistungen.copy(
+      lineItems = List(
+        dachfensterMitLeistungen
+          .lineItems(0)
+          .copy(quantity = absent, unitPrice = absent, total = absent),
+        dachfensterMitLeistungen.lineItems(1)
+      )
+    )
+    TestApp.fresh(RecordingExtractor(List(incomplete))).use { app =>
+      upload(app).map { (_, html) =>
+        val matrix = html
+          .split("""class="leistungen"""", 2)
+          .lift(1)
+          .getOrElse("")
+          .split("""class="zuordnung"""", 2)
+          .headOption
+          .getOrElse("")
+        matrix should include("Menge fehlt")
+        matrix should include("Preis fehlt")
+        // No consistency / mismatch warning for missing prices.
+        html should not include ("Weicht vom Netto ab")
+        html should not include ("Positionssumme nicht prüfbar")
+        html should include("""data-abweichung="false"""")
+      }
+    }
+  }
+
   "a manual status survives later extractions and a restart; 'auto' brings the read one back" in {
     TestApp.tempDir.use { dir =>
       val extractor = RecordingExtractor(List(dachfensterMitLeistungen))
