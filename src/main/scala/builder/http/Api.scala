@@ -499,7 +499,7 @@ final class Api(
                 val name = fileName.getOrElse(s"angebot.${fileType.extension}")
                 // Read first (cancel mid-read leaves no file). Keep/obsolete are decided only
                 // inside addUpload's lock; the file is staged anonymously, then moved onto the
-                // kept id after the txn so concurrent same-firm uploads cannot orphan bytes.
+                // kept id after the txn but still under the lock (afterCommit).
                 val read = extractor
                   .extract(bytes, fileType, known)
                   .flatMap(extracted =>
@@ -514,16 +514,20 @@ final class Api(
                 IO.uncancelable(poll =>
                   poll(read).flatMap { draft =>
                     poll(files.stage(bytes)).flatMap { staged =>
-                      val stored = poll(repo.addUpload(p, draft)).flatMap {
-                        case Left(e) =>
-                          files.discard(staged).as(Left(e): Either[RepoError, Unit])
-                        case Right(UploadStored(keep, obsolete)) =>
+                      // File commit + obsolete deletes run inside addUpload's lock, so a
+                      // concurrent replace cannot leave DB and file pointing at different uploads.
+                      val afterCommit: UploadStored => IO[Unit] = {
+                        case UploadStored(keep, obsolete) =>
                           files.commit(staged, keep, fileType) >>
                             obsolete.traverse_(id => files.deleteAll(id)) >>
                             OfferFileType.values.toList
                               .filterNot(_ == fileType)
                               .traverse_(ft => files.delete(keep, ft))
-                              .as(Right(()))
+                      }
+                      val stored = poll(repo.addUpload(p, draft, afterCommit)).flatMap {
+                        case Left(e) =>
+                          files.discard(staged).as(Left(e): Either[RepoError, Unit])
+                        case Right(_) => IO.pure(Right(()): Either[RepoError, Unit])
                       }
                       stored.guaranteeCase {
                         case Outcome.Succeeded(_)                    => IO.unit

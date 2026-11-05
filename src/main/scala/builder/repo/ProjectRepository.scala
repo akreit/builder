@@ -121,9 +121,14 @@ trait ProjectRepository:
     * in place (same offer id) rather than creating a second offer. `Right` carries the offer id
     * that was kept and the obsolete same-firm ids whose files the caller should delete — both
     * decided under the repository lock from a fresh load, so the caller must not guess them
-    * beforehand.
+    * beforehand. `afterCommit` runs after a successful transaction while the lock is still held, so
+    * file moves/deletes for this upload cannot interleave with a concurrent replace.
     */
-  def addUpload(id: ProjectId, upload: Upload): IO[Either[RepoError, UploadStored]]
+  def addUpload(
+      id: ProjectId,
+      upload: Upload,
+      afterCommit: UploadStored => IO[Unit]
+  ): IO[Either[RepoError, UploadStored]]
 
   /** Applies a manual change and returns the updated project. */
   def edit(id: ProjectId, e: Edit): IO[Either[RepoError, ProjectView]]
@@ -318,7 +323,11 @@ final class PostgresProjectRepository private (
       }
     )
 
-  def addUpload(id: ProjectId, upload: Upload): IO[Either[RepoError, UploadStored]] =
+  def addUpload(
+      id: ProjectId,
+      upload: Upload,
+      afterCommit: UploadStored => IO[Unit]
+  ): IO[Either[RepoError, UploadStored]] =
     lock.lock.surround(
       load(id).flatMap {
         case Left(e)                                                           => IO.pure(Left(e))
@@ -355,7 +364,12 @@ final class PostgresProjectRepository private (
                       )
                     )
                   case UploadOutcome.Failed(_) => Nil)
-            ).map(_.map(_ => UploadStored(keep, obsolete)))
+            ).flatMap {
+              case Left(e)  => IO.pure(Left(e))
+              case Right(_) =>
+                val stored = UploadStored(keep, obsolete)
+                afterCommit(stored).as(Right(stored))
+            }
           )
       }
     )

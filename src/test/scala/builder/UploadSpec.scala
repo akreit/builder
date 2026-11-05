@@ -311,7 +311,7 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
       }
   }
 
-  "two concurrent same-firm uploads keep one offer id and one matching file" in {
+  "two concurrent same-firm uploads keep one offer id and a file matching the DB row" in {
     val pdfA = "%PDF-1.7\nAAA-same-firm".getBytes("UTF-8")
     val pdfB = "%PDF-1.7\nBBB-same-firm".getBytes("UTF-8")
     for
@@ -336,11 +336,12 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
               bytes <- pdfs.traverse(p => IO.blocking(Files.readAllBytes(java.nio.file.Path.of(p))))
               ids =
                 ("""data-upload="([^"]+)"""".r.findAllMatchIn(body1 ++ body2).map(_.group(1)).toSet)
-            yield (st1, st2, ids, pdfs.size, bytes)
+              finalPage <- page(app)
+            yield (st1, st2, ids, pdfs.size, bytes, finalPage)
         }
       }
     yield
-      val (st1, st2, ids, pdfCount, contents) = result
+      val (st1, st2, ids, pdfCount, contents, finalPage) = result
       st1 shouldBe Status.Ok
       st2 shouldBe Status.Ok
       ids.size shouldBe 1
@@ -348,6 +349,11 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
       contents.size shouldBe 1
       val kept = contents.head
       (kept.sameElements(pdfA) || kept.sameElements(pdfB)) shouldBe true
+      // DB <-> file consistency: the file name recorded in the DB must belong to the stored bytes.
+      val dbName = if finalPage.contains("b.pdf") then "b.pdf" else "a.pdf"
+      (finalPage.contains("a.pdf") && finalPage.contains("b.pdf")) shouldBe false
+      val expected = if dbName == "a.pdf" then pdfA else pdfB
+      kept.sameElements(expected) shouldBe true
   }
 
   private def edit(app: TestApp, fields: (String, String)*): IO[(Status, String)] =
