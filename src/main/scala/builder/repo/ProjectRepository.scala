@@ -5,6 +5,7 @@ import builder.extraction.*
 import cats.data.EitherT
 import cats.data.NonEmptyList
 import cats.effect.IO
+import cats.effect.Outcome
 import cats.effect.Resource
 import cats.effect.std.Mutex
 import cats.syntax.all.*
@@ -64,6 +65,13 @@ final case class UploadView(upload: Upload, status: UploadStatus)
   */
 final case class UploadStored(keep: OfferId, obsolete: List[OfferId])
 
+/** The file side of an upload, already made durable before the DB transaction runs: `rollback`
+  * undoes it when the transaction fails or is canceled; `finish` drops what is no longer needed
+  * after a commit (backups, obsolete files). A failing `finish` only leaves orphan files — the DB
+  * row and the live file already agree.
+  */
+final case class FileStep(rollback: IO[Unit], finish: IO[Unit])
+
 /** A project including all accepted uploaded offers, plus every upload with its status, and
   * warnings about stored data that could not be used (unreadable rows, ignored favorites).
   */
@@ -121,13 +129,14 @@ trait ProjectRepository:
     * in place (same offer id) rather than creating a second offer. `Right` carries the offer id
     * that was kept and the obsolete same-firm ids whose files the caller should delete — both
     * decided under the repository lock from a fresh load, so the caller must not guess them
-    * beforehand. `afterCommit` runs after a successful transaction while the lock is still held, so
-    * file moves/deletes for this upload cannot interleave with a concurrent replace.
+    * beforehand. Under the lock, `prepare` first puts the file durably in place (returning how to
+    * undo it); only then is the transaction run. If it fails or is canceled the file step is rolled
+    * back, so DB and file never disagree, and a concurrent replace cannot interleave.
     */
   def addUpload(
       id: ProjectId,
       upload: Upload,
-      afterCommit: UploadStored => IO[Unit]
+      prepare: UploadStored => IO[FileStep]
   ): IO[Either[RepoError, UploadStored]]
 
   /** Applies a manual change and returns the updated project. */
@@ -326,7 +335,7 @@ final class PostgresProjectRepository private (
   def addUpload(
       id: ProjectId,
       upload: Upload,
-      afterCommit: UploadStored => IO[Unit]
+      prepare: UploadStored => IO[FileStep]
   ): IO[Either[RepoError, UploadStored]] =
     lock.lock.surround(
       load(id).flatMap {
@@ -346,30 +355,38 @@ final class PostgresProjectRepository private (
             case UploadOutcome.Read(raw) => LeistungPlan.proposals(raw).size
             case UploadOutcome.Failed(_) => 0
           val replacing = v.uploads.exists(_.upload.id == keep)
+          val stored = UploadStored(keep, obsolete)
           freshIds("l", proposed).flatMap(ids =>
-            db.transact(
-              favoriteRetarget(id, v, upload.category, keep, obsolete) ++
-                obsolete.map(o => Stmt(Sql.deleteOffer, (id.value, o.value))) ++
-                uploadStatements(id, effective, extraction, version, failure, replacing) ++
-                (effective.outcome match
-                  case UploadOutcome.Read(raw) =>
-                    planStatements(
-                      id,
-                      keep,
-                      LeistungPlan.plan(
-                        raw,
-                        upload.category,
-                        v.leistungen.filter(_.category == upload.category),
-                        LazyList.from(ids)
-                      )
-                    )
-                  case UploadOutcome.Failed(_) => Nil)
-            ).flatMap {
-              case Left(e)  => IO.pure(Left(e))
-              case Right(_) =>
-                val stored = UploadStored(keep, obsolete)
-                afterCommit(stored).as(Right(stored))
-            }
+            IO.uncancelable(poll =>
+              prepare(stored).flatMap(step =>
+                poll(
+                  db.transact(
+                    favoriteRetarget(id, v, upload.category, keep, obsolete) ++
+                      obsolete.map(o => Stmt(Sql.deleteOffer, (id.value, o.value))) ++
+                      uploadStatements(id, effective, extraction, version, failure, replacing) ++
+                      (effective.outcome match
+                        case UploadOutcome.Read(raw) =>
+                          planStatements(
+                            id,
+                            keep,
+                            LeistungPlan.plan(
+                              raw,
+                              upload.category,
+                              v.leistungen.filter(_.category == upload.category),
+                              LazyList.from(ids)
+                            )
+                          )
+                        case UploadOutcome.Failed(_) => Nil)
+                  )
+                ).guaranteeCase {
+                  case Outcome.Succeeded(_)                    => IO.unit
+                  case Outcome.Errored(_) | Outcome.Canceled() => step.rollback
+                }.flatMap {
+                  case Left(e)  => step.rollback.as(Left(e))
+                  case Right(_) => step.finish.attempt.as(Right(stored))
+                }
+              )
+            )
           )
       }
     )
