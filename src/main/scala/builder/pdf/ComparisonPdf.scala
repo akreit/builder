@@ -3,6 +3,7 @@ package builder.pdf
 import builder.domain.*
 import builder.extraction.RawLineItem
 import builder.repo.*
+import builder.ui.Format
 import org.apache.pdfbox.pdmodel.PDDocument
 import org.apache.pdfbox.pdmodel.PDPage
 import org.apache.pdfbox.pdmodel.PDPageContentStream
@@ -27,7 +28,7 @@ object ComparisonPdf:
   private def position(li: RawLineItem): String =
     s"${li.description.text.getOrElse("Beschreibung fehlt")}\nMenge: ${li.quantity.text.getOrElse("?")} ${li.unit.text.getOrElse("")}\nEP: ${li.unitPrice.text.getOrElse("?")}\nGesamt: ${li.total.text.getOrElse("?")}"
 
-  private def rows(m: Matrix, indexes: List[Int], currency: String): List[List[String]] =
+  private def rows(m: Matrix, indexes: List[Int]): List[List[String]] =
     def columns(f: Int => String): List[String] = indexes.map(f)
     val scope = m.rows.map(r =>
       r.leistung.name.value :: columns(i =>
@@ -35,7 +36,7 @@ object ComparisonPdf:
           .lift(i)
           .fold("?")(c =>
             coverage(c.coverage) + (if c.flagged then " (prüfen)" else "") +
-              s" | Summe: ${c.price.map(_.show).getOrElse("?")} $currency" +
+              s" | Summe: ${c.price.map(Format.money).getOrElse("?")}" +
               m.columns
                 .lift(i)
                 .toList
@@ -55,12 +56,13 @@ object ComparisonPdf:
         )
         .mkString("\n")
     )
-    val totals = "Angebotssummen" :: columns(i =>
-      m.columns
+    val totals = "Summe Zellen + nicht zugeordnet" :: columns(i =>
+      m.totals
         .lift(i)
-        .fold("?")(col =>
-          s"Netto: ${col.raw.net.text.getOrElse("?")} $currency\nBrutto: ${col.raw.gross.text.getOrElse("?")} $currency" +
-            m.totals.lift(i).filter(_.mismatch).fold("")(_ => "\nABWEICHUNG: Zuordnung prüfen")
+        .fold("?")(t =>
+          t.sum.map(Format.money).getOrElse("nicht lesbar") +
+            s"\nNetto laut Angebot: ${t.net.map(Format.money).getOrElse("nicht lesbar")}" +
+            (if t.mismatch then "\nWeicht vom Netto ab – Zuordnung prüfen" else "")
         )
     )
     val exclusions = "AUSSCHLÜSSE" :: columns(i =>
@@ -113,7 +115,7 @@ object ComparisonPdf:
           )
           val width = 780f / headings.size
           val textWidth = width - 12
-          val lines = rows(m, indexes, view.project.currency.code).flatMap { row =>
+          val lines = rows(m, indexes).flatMap { row =>
             val cells = row.map(wrapped(_, textWidth))
             val height = cells.map(_.size).maxOption.getOrElse(1)
             (0 until height).toList.map(n => cells.map(_.lift(n).getOrElse(""))) :+
