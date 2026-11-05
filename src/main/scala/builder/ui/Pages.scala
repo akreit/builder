@@ -5,12 +5,10 @@ import builder.extraction.*
 import builder.ranking.*
 import builder.repo.*
 import builder.totals.*
+import builder.ui.offer.OfferDetail
 import scalatags.Text.TypedTag
 import scalatags.Text.all.*
 import scalatags.Text.tags2
-
-import java.time.LocalDate
-import scala.util.Try
 
 /** Server-rendered German UI (Scalatags + htmx). */
 object Pages:
@@ -38,6 +36,8 @@ object Pages:
       |.st-enthalten{background:#e3f4e3}.st-nicht{background:#f3f3f3}.st-ausgeschlossen{background:#f8dede}.st-unklar{background:#fff3cd}
       |td.pruefen,div.pruefen{outline:2px solid #f0ad4e;outline-offset:-2px}form.aendern{display:inline-block;margin:.15rem .25rem .15rem 0}
       |table.matrix select{font-size:.8rem}details summary{cursor:pointer}section.leistungen{margin-top:1rem}
+      |.positionen details{margin:.35rem 0;border:1px solid #e3e3e3;border-radius:4px;padding:.2rem .55rem}
+      |.positionen summary{list-style-position:outside}.positionen .fehlend{background:#f5d0d0;font-size:.8rem;padding:0 .3rem;border-radius:3px;white-space:nowrap}
       |table.rangliste td{vertical-align:top}td.gesamt{font-size:1.05rem}section.gewichtung{margin:1rem 0}section.gewichtung input[type=number]{width:4rem}""".stripMargin
 
   private def statusBadge(s: CategoryStatus): Frag = s match
@@ -84,82 +84,6 @@ object Pages:
       )
     )
 
-  private def pageRef(f: Field): Frag =
-    span(cls := "seite")(f.pageNumber.fold("–")(n => s"S. ${n.value}"))
-
-  private def flag(f: Field): Frag = f.confidence match
-    case Confidence.Low =>
-      span(cls := "flag niedrig", title := "Geringe Sicherheit – bitte im Original prüfen")(
-        "⚠ prüfen"
-      )
-    case Confidence.Medium => span(cls := "flag mittel")("mittel")
-    case Confidence.High   => frag()
-
-  private val amountLabels = Set("Netto", "MwSt.", "Brutto", "Einzelpreis", "Gesamtpreis")
-  private val dateLabels = Set("Angebotsdatum", "Gültig bis")
-
-  /** German display of a raw extracted value; unparseable values are shown as read. */
-  private def shown(label: String, f: Field, cur: Currency): String =
-    f.text.fold("—")(t =>
-      if amountLabels(label) then
-        Try(BigDecimal(t)).toOption
-          .flatMap(Money.fromDecimal(_, cur).toOption)
-          .fold(t)(Format.money)
-      else if dateLabels(label) then Try(LocalDate.parse(t)).toOption.fold(t)(Format.date)
-      else if label == "MwSt.-Satz" then s"$t %"
-      else t
-    )
-
-  private def unsureClass(f: Field): Modifier =
-    if f.isLowConfidence then cls := "unsicher" else frag()
-
-  private def extractedOffer(raw: RawOffer, cur: Currency): Frag =
-    frag(
-      table(cls := "felder")(
-        raw.labelled.map((l, f) =>
-          tr(unsureClass(f))(th(l), td(shown(l, f, cur)), td(pageRef(f)), td(flag(f)))
-        )
-      ),
-      if raw.lineItems.isEmpty then p(cls := "hinweis")("Keine Einzelpositionen (Pauschalangebot).")
-      else
-        table(
-          thead(
-            tr(
-              th("Pos."),
-              raw.lineItems.headOption.toList.flatMap(_.labelled).map((l, _) => th(l)),
-              th("Seite")
-            )
-          ),
-          tbody(
-            raw.lineItems.zipWithIndex.map((li, i) =>
-              tr(
-                td(i + 1),
-                li.labelled.map((l, f) =>
-                  td(unsureClass(f), if amountLabels(l) then cls := "betrag" else ())(
-                    shown(l, f, cur),
-                    " ",
-                    flag(f)
-                  )
-                ),
-                td(pageRef(li.description))
-              )
-            )
-          )
-        )
-      ,
-      textList("Hinweise", raw.notes),
-      textList("Nicht enthalten", raw.exclusions)
-    )
-
-  private def textList(title: String, items: List[Field]): Frag =
-    items.filter(_.text.nonEmpty) match
-      case Nil            => frag()
-      case all @ (_ :: _) =>
-        frag(
-          h4(title),
-          ul(all.map(n => li(unsureClass(n))(n.text.getOrElse(""), " ", pageRef(n), " ", flag(n))))
-        )
-
   private def uploadBlock(u: UploadView, cur: Currency): Frag =
     val heading = h3(s"Hochgeladen: ${u.upload.fileName}")
     div(cls := "upload", attr("data-upload") := u.upload.id.value)(
@@ -174,19 +98,33 @@ object Pages:
               ul(issues.toList.map(i => li(describe(i))))
             ),
             lowConfidenceWarning(raw),
-            extractedOffer(raw, cur)
+            OfferDetail.render(raw, cur)
           )
-        case UploadStatus.Accepted(raw, _) =>
+        case UploadStatus.Accepted(raw, offer) =>
           frag(
             heading,
-            p("Ausgelesen und geprüft: Positionen, Netto, MwSt. und Brutto stimmen überein."),
+            p(acceptanceMessage(offer)),
             lowConfidenceWarning(raw),
             tags2.details(attr("open") := "open")(
               tags2.summary("Ausgelesene Angebotsdaten mit Seitenangaben"),
-              extractedOffer(raw, cur)
+              OfferDetail.render(raw, cur)
             )
           )
     )
+
+  /** German status line for an accepted offer. Position sum is mentioned only when every position
+    * has a price (`lineSumCheck` is defined); missing prices are normal — no extra warning.
+    */
+  private def acceptanceMessage(offer: Offer): String =
+    val amountsOk = "Netto, MwSt. und Brutto stimmen überein"
+    offer.lineSumCheck match
+      case Some(LineSumCheck.Consistent) if offer.lineItems.nonEmpty =>
+        s"Ausgelesen und geprüft: Positionen, $amountsOk."
+      case Some(LineSumCheck.Consistent) | None =>
+        s"Ausgelesen und geprüft: $amountsOk."
+      case Some(LineSumCheck.Mismatch(sum, net)) =>
+        // Accepted offers cannot carry a mismatch (Offer.from rejects it); keep exhaustiveness.
+        s"Ausgelesen und geprüft: $amountsOk. Positionssumme ${Format.money(sum)} ≠ Netto ${Format.money(net)}."
 
   private def lowConfidenceWarning(raw: RawOffer): Frag =
     raw.lowConfidenceFields match

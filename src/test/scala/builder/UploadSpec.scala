@@ -372,3 +372,45 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
         own.isRight shouldBe true
     )
   }
+
+  "an offer with a position missing price and quantity is accepted, counted and shown collapsed" in {
+    val incomplete = dachfenster.copy(
+      lineItems = List(
+        item("Dachfenster liefern", "3", "Stk", "1250.00", "3750.00"),
+        RawLineItem(
+          f("Einbau ohne Preis/Menge", 2),
+          absent,
+          f("Stk", 2),
+          absent,
+          absent,
+          absent,
+          absent,
+          absent
+        )
+      )
+    )
+    withApp(Right(incomplete)) { app =>
+      for
+        before <- net(app)
+        (status, body) <- upload(app, pdf)
+        after <- net(app)
+      yield
+        status shouldBe Status.Ok
+        body should include("Ausgelesen und geprüft: Netto, MwSt. und Brutto stimmen überein.")
+        body should not include ("Positionssumme nicht prüfbar")
+        body should not include ("Positionen, Netto, MwSt. und Brutto stimmen überein")
+        body should include("Einbau ohne Preis/Menge")
+        body should include("Menge fehlt")
+        body should include("Preis fehlt")
+        body should include("""class="positionen"""")
+        body should include("<details")
+        body should include("<summary")
+        // Position <details> stay collapsed (no open attr); the outer "Ausgelesene Angebotsdaten" may be open.
+        body should include("""<details class="position">""")
+        body should not include ("""<details class="position" open""")
+        // Offer still counted (only offer in Dachfenster): +5010 net
+        before shouldBe "21118.50"
+        after shouldBe "26128.50"
+        body should include("26.128,50 €")
+    }
+  }

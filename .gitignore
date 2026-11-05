@@ -32,3 +32,4 @@ service-account*.json
 !.devcontainer/devbox.tools.json
 .sandcat/settings.local.json
 # /Sandcat
+.sbt-boot/

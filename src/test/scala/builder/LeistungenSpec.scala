@@ -88,6 +88,19 @@ class LeistungenSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with E
     (nothing.coverage, nothing.flagged) shouldBe (Coverage.Unklar, true)
   }
 
+  "ColumnTotal.mismatch only when all prices are known and the sum differs from net" in {
+    val net = Fixtures.eur(500)
+    val ok = ColumnTotal(Some(Fixtures.eur(300)), Some(Fixtures.eur(200)), Some(net))
+    ok.mismatch shouldBe false
+    val off = ColumnTotal(Some(Fixtures.eur(300)), Some(Fixtures.eur(100)), Some(net))
+    off.mismatch shouldBe true
+    // Missing cell or unassigned price → no hint (Andreas: treat like normal, no "nicht prüfbar")
+    ColumnTotal(None, Some(Fixtures.eur(0)), Some(net)).mismatch shouldBe false
+    ColumnTotal(Some(Fixtures.eur(500)), None, Some(net)).mismatch shouldBe false
+    ColumnTotal(None, None, Some(net)).mismatch shouldBe false
+    ColumnTotal(Some(Fixtures.eur(500)), Some(Fixtures.eur(0)), None).mismatch shouldBe false
+  }
+
   "without a stated status, mapped items mean 'enthalten'; a manual status wins and is not flagged" in {
     Matrix
       .cell(None, List(0), List(Some(Fixtures.eur(5))), Currency.EUR)
