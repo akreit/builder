@@ -59,6 +59,11 @@ enum UploadStatus:
 
 final case class UploadView(upload: Upload, status: UploadStatus)
 
+/** Outcome of [[ProjectRepository.addUpload]]: which offer id the row landed on, and which
+  * same-firm uploads in the category were removed in the same transaction.
+  */
+final case class UploadStored(keep: OfferId, obsolete: List[OfferId])
+
 /** A project including all accepted uploaded offers, plus every upload with its status, and
   * warnings about stored data that could not be used (unreadable rows, ignored favorites).
   */
@@ -113,10 +118,12 @@ trait ProjectRepository:
 
   /** Stores an uploaded offer of `id`; it is validated (and counted if valid) on every read. When
     * the project already has an upload of the same firm in the same category, that row is replaced
-    * in place (same offer id) rather than creating a second offer. `Right` means the row is
-    * committed.
+    * in place (same offer id) rather than creating a second offer. `Right` carries the offer id
+    * that was kept and the obsolete same-firm ids whose files the caller should delete — both
+    * decided under the repository lock from a fresh load, so the caller must not guess them
+    * beforehand.
     */
-  def addUpload(id: ProjectId, upload: Upload): IO[Either[RepoError, Unit]]
+  def addUpload(id: ProjectId, upload: Upload): IO[Either[RepoError, UploadStored]]
 
   /** Applies a manual change and returns the updated project. */
   def edit(id: ProjectId, e: Edit): IO[Either[RepoError, ProjectView]]
@@ -311,13 +318,14 @@ final class PostgresProjectRepository private (
       }
     )
 
-  def addUpload(id: ProjectId, upload: Upload): IO[Either[RepoError, Unit]] =
+  def addUpload(id: ProjectId, upload: Upload): IO[Either[RepoError, UploadStored]] =
     lock.lock.surround(
       load(id).flatMap {
         case Left(e)                                                           => IO.pure(Left(e))
         case Right(v) if !v.project.categories.exists(_.id == upload.category) =>
           IO.pure(Left(RepoError.CategoryNotFound(upload.category)))
         case Right(v) =>
+          // Keep/obsolete only under the lock from a fresh view — never from a stale snapshot.
           val keep = UploadReplace.kept(v, upload)
           val effective = upload.copy(id = keep)
           val obsolete = UploadReplace.obsolete(v, upload).map(_.id)
@@ -347,7 +355,7 @@ final class PostgresProjectRepository private (
                       )
                     )
                   case UploadOutcome.Failed(_) => Nil)
-            )
+            ).map(_.map(_ => UploadStored(keep, obsolete)))
           )
       }
     )

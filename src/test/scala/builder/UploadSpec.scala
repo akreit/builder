@@ -2,7 +2,9 @@ package builder
 
 import builder.RawOffers.CountingExtractor
 import builder.extraction.*
+import cats.effect.Deferred
 import cats.effect.IO
+import cats.effect.Ref
 import cats.effect.testing.scalatest.AsyncIOSpec
 import cats.syntax.all.*
 import fs2.Stream
@@ -255,6 +257,117 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
         after shouldBe "26618.50"
     }
   }
+
+  "manual coverage and item assignment survive a same-firm overwrite" in {
+    val updated = dachfensterMitLeistungen.copy(
+      net = f("6000.00", 3),
+      vat = f("1140.00", 3),
+      gross = f("7140.00", 3),
+      lineItems = List(
+        dachfensterMitLeistungen.lineItems(0).copy(leistung = Some("fenster-fenster")),
+        dachfensterMitLeistungen.lineItems(1).copy(leistung = Some("fenster-einbau"))
+      ),
+      neueLeistungen = None,
+      abdeckung = dachfensterMitLeistungen.abdeckung.map(
+        _.map(a =>
+          if a.leistung == "fenster-entsorgung" then a.copy(status = "nicht_enthalten")
+          else if a.leistung == "fenster-einbau" then a.copy(status = "enthalten")
+          else a
+        )
+      )
+    )
+    TestApp
+      .fresh(RecordingExtractor(List(dachfensterMitLeistungen, updated)))
+      .use { app =>
+        for
+          (_, body1) <- upload(app, pdf, "alt.pdf")
+          offer = uploadId(body1)
+          _ <- edit(
+            app,
+            "aktion" -> "status-setzen",
+            "angebot" -> offer,
+            "leistung" -> "fenster-entsorgung",
+            "status" -> "enthalten"
+          )
+          _ <- edit(
+            app,
+            "aktion" -> "position-zuordnen",
+            "angebot" -> offer,
+            "position" -> "1",
+            "ziel" -> ""
+          )
+          (_, body2) <- upload(app, pdf, "neu.pdf")
+          afterId = uploadId(body2)
+        yield
+          afterId shouldBe offer
+          """data-upload="""".r.findAllIn(body2).size shouldBe 1
+          body2 should include("neu.pdf")
+          coverageStatus(body2, "fenster-entsorgung", offer) shouldBe Some("enthalten")
+          body2 should include("manuell")
+          body2 should include("Nicht zugeordnet")
+          body2 should include("Pos. 1: Dachfenster liefern")
+          // Overwrite did apply: second line item now counts under Einbau.
+          body2 should include("6.000,00")
+      }
+  }
+
+  "two concurrent same-firm uploads keep one offer id and one matching file" in {
+    val pdfA = "%PDF-1.7\nAAA-same-firm".getBytes("UTF-8")
+    val pdfB = "%PDF-1.7\nBBB-same-firm".getBytes("UTF-8")
+    for
+      ready <- Ref[IO].of(0)
+      go <- Deferred[IO, Unit]
+      extractor = new OfferExtractor[IO]:
+        def extract(
+            file: Array[Byte],
+            fileType: OfferFileType,
+            known: List[builder.domain.Leistung]
+        ) =
+          ready.modify(n => (n + 1, n + 1)).flatMap { n =>
+            val open = if n >= 2 then go.complete(()).void else IO.unit
+            open >> go.get.as(Right(dachfenster): Either[ExtractionError, RawOffer])
+          }
+      result <- TestApp.fresh(extractor).use { app =>
+        (upload(app, pdfA, "a.pdf"), upload(app, pdfB, "b.pdf")).parTupled.flatMap {
+          case ((st1, body1), (st2, body2)) =>
+            for
+              files <- storedFiles(app)
+              pdfs = files.filter(_.endsWith(".pdf"))
+              bytes <- pdfs.traverse(p => IO.blocking(Files.readAllBytes(java.nio.file.Path.of(p))))
+              ids =
+                ("""data-upload="([^"]+)"""".r.findAllMatchIn(body1 ++ body2).map(_.group(1)).toSet)
+            yield (st1, st2, ids, pdfs.size, bytes)
+        }
+      }
+    yield
+      val (st1, st2, ids, pdfCount, contents) = result
+      st1 shouldBe Status.Ok
+      st2 shouldBe Status.Ok
+      ids.size shouldBe 1
+      pdfCount shouldBe 1
+      contents.size shouldBe 1
+      val kept = contents.head
+      (kept.sameElements(pdfA) || kept.sameElements(pdfB)) shouldBe true
+  }
+
+  private def edit(app: TestApp, fields: (String, String)*): IO[(Status, String)] =
+    app.http
+      .run(
+        Request[IO](Method.POST, Uri.unsafeFromString("/ui/projects/demo/aenderungen"))
+          .withEntity(UrlForm((("ansicht" -> "fenster") +: fields)*))
+          .putHeaders("HX-Request" -> "true")
+      )
+      .flatMap(r => r.bodyText.compile.string.map(r.status -> _))
+
+  private def coverageStatus(html: String, leistung: String, offer: String): Option[String] =
+    s"""data-zelle="${java.util.regex.Pattern.quote(
+        s"$leistung|$offer"
+      )}" data-status="([a-z_]+)"""".r
+      .findFirstMatchIn(html)
+      .map(_.group(1))
+
+  private def uploadId(body: String): String =
+    """data-upload="([^"]+)"""".r.findFirstMatchIn(body).fold("")(_.group(1))
 
   private def storedFiles(app: TestApp): IO[List[String]] =
     IO.blocking {
