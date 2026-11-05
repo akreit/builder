@@ -23,13 +23,15 @@ import java.util.concurrent.TimeoutException
 import scala.concurrent.duration.*
 
 class ClaudeOfferExtractorSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
-  private val prompts = ExtractionPrompts("test prompt", "empty", "known:\n")
+  private val prompts = ExtractionPrompts("test prompt", "empty", "known:\n", "Teil {label}")
 
   private val pdf = "%PDF-1.7".getBytes("UTF-8")
 
-  private def contentTypes(fileType: OfferFileType): List[String] =
+  private val scanned = PassContent.ScannedPdf(pdf)
+
+  private def contentTypes(content: PassContent): List[String] =
     ClaudeOfferExtractor
-      .requestBody("claude-sonnet-5-5", pdf, fileType, Nil, prompts)
+      .requestBody("claude-sonnet-5-5", content, Nil, prompts)
       .hcursor
       .downField("messages")
       .downArray
@@ -38,17 +40,27 @@ class ClaudeOfferExtractorSpec extends AsyncFreeSpec with AsyncIOSpec with Match
       .getOrElse(Nil)
       .flatMap(_.hcursor.downField("type").as[String].toOption)
 
-  "a PDF is sent as a document block, images as image blocks" in {
-    contentTypes(OfferFileType.Pdf) shouldBe List("document", "text")
-    contentTypes(OfferFileType.Png) shouldBe List("image", "text")
-    contentTypes(OfferFileType.Jpeg) shouldBe List("image", "text")
+  "PDF text goes as a text block, scans as a document block, images as image blocks" in {
+    val chunk = TextChunk(1, 1, List(PdfPage(1, "Angebot")))
+    contentTypes(PassContent.Text(chunk)) shouldBe List("text", "text")
+    contentTypes(scanned) shouldBe List("document", "text")
+    contentTypes(PassContent.Image(pdf, OfferFileType.Png)) shouldBe List("image", "text")
+    contentTypes(PassContent.Image(pdf, OfferFileType.Jpeg)) shouldBe List("image", "text")
+  }
+
+  "max_tokens of every pass is the documented output budget (16000)" in {
+    ClaudeOfferExtractor
+      .requestBody("m", scanned, Nil, prompts)
+      .hcursor
+      .downField("max_tokens")
+      .as[Int] shouldBe Right(16000)
   }
 
   "the category's existing Leistungen are sent with the prompt, so items map onto them" in {
     val known = SampleData.leistungen.toOption.toList.flatten.map(_._2)
     ExtractionPrompts.load.flatMap(IO.fromEither).asserting { loaded =>
       val text = ClaudeOfferExtractor
-        .requestBody("claude-sonnet-5-5", pdf, OfferFileType.Pdf, known, loaded)
+        .requestBody("claude-sonnet-5-5", scanned, known, loaded)
         .hcursor
         .downField("messages")
         .downArray
@@ -90,7 +102,7 @@ class ClaudeOfferExtractorSpec extends AsyncFreeSpec with AsyncIOSpec with Match
     val noNetwork =
       Client[IO](_ => cats.effect.Resource.eval(IO.raiseError(IllegalStateException("network"))))
     ClaudeOfferExtractor(noNetwork, None, "m", prompts)
-      .extract(pdf, OfferFileType.Pdf, Nil)
+      .run(scanned, Nil)
       .asserting(_ shouldBe Left(ExtractionError.MissingApiKey))
   }
 
@@ -142,7 +154,7 @@ class ClaudeOfferExtractorSpec extends AsyncFreeSpec with AsyncIOSpec with Match
         calls <- Ref.of[IO, Int](0)
         start <- IO.monotonic
         result <- ClaudeOfferExtractor(scripted(calls, answers), testKey, "m", prompts)
-          .extract(pdf, OfferFileType.Pdf, Nil)
+          .run(scanned, Nil)
         end <- IO.monotonic
         n <- calls.get
       yield (result, n, end - start)

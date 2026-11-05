@@ -28,6 +28,7 @@ lazy val root = (project in file("."))
       "com.softwaremill.sttp.tapir" %% "tapir-files" % tapirV,
       "com.lihaoyi" %% "scalatags" % scalatagsV,
       "io.circe" %% "circe-parser" % circeV,
+      "org.apache.pdfbox" % "pdfbox" % "3.0.8",
       "org.scalatest" %% "scalatest" % scalatestV % Test,
       "com.dimafeng" %% "testcontainers-scala-core" % "0.44.1" % Test,
       "org.typelevel" %% "cats-effect-testkit" % catsEffectV % Test,

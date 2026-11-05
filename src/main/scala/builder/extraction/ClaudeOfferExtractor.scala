@@ -29,10 +29,6 @@ object ApiKey:
   def fromEnv: Option[ApiKey] = sys.env.lift("ANTHROPIC_API_KEY").flatMap(from)
   extension (k: ApiKey) private[extraction] def secret: String = k
 
-/** [[OfferExtractor]] backed by Claude: the file goes to the Messages API as a `document` (PDF) or
-  * `image` block, and structured outputs (`output_config.format`) make the answer JSON matching
-  * [[RawOffer]].
-  */
 /** Retries of rate limits (429), server errors (5xx, incl. 529 overloaded) and connection errors:
   * the n-th retry waits about `base * 2^n` (equal jitter, at most `maxDelay`), or longer if the API
   * asks for it via `retry-after`.
@@ -67,20 +63,23 @@ private enum Attempt:
   case Done(result: Either[ExtractionError, RawOffer])
   case Retry(error: ExtractionError, retryAfter: Option[FiniteDuration])
 
+/** [[OfferPass]] backed by Claude: one Messages API call per pass. PDF text chunks go as `text`
+  * blocks, images as `image` blocks, text-less (scanned) PDFs as a `document` block; structured
+  * outputs (`output_config.format`) make the answer JSON matching [[RawOffer]]. Wrap it in
+  * [[MultiPassOfferExtractor]] to get an [[OfferExtractor]].
+  */
 final class ClaudeOfferExtractor(
     client: Client[IO],
     key: Option[ApiKey],
     model: String,
     prompts: ExtractionPrompts,
     retry: RetryPolicy = RetryPolicy.default
-) extends OfferExtractor[IO]:
+) extends OfferPass[IO]:
   import ClaudeOfferExtractor.*
 
-  def extract(
-      file: Array[Byte],
-      fileType: OfferFileType,
-      known: List[Leistung]
-  ): IO[Either[ExtractionError, RawOffer]] =
+  def promptText(known: List[Leistung]): String = instructions(known, prompts)
+
+  def run(content: PassContent, known: List[Leistung]): IO[Either[ExtractionError, RawOffer]] =
     key match
       case None    => IO.pure(Left(ExtractionError.MissingApiKey))
       case Some(k) =>
@@ -92,7 +91,7 @@ final class ClaudeOfferExtractor(
               `Content-Type`(MediaType.application.json)
             )
           )
-          .withEntity(requestBody(model, file, fileType, known, prompts).noSpaces)
+          .withEntity(requestBody(model, content, known, prompts).noSpaces)
         Random
           .scalaUtilRandom[IO]
           .flatMap(random => withRetries(req, random, 0))
@@ -253,26 +252,40 @@ object ClaudeOfferExtractor:
       )
   ).deepMerge(Json.obj("$defs" -> Json.obj("feld" -> fieldDef)))
 
-  private def fileBlock(file: Array[Byte], fileType: OfferFileType): Json =
-    val source = Json.obj(
-      "type" -> "base64".asJson,
-      "media_type" -> fileType.mediaType.asJson,
-      "data" -> Base64.getEncoder.encodeToString(file).asJson
-    )
-    fileType match
-      case OfferFileType.Pdf => Json.obj("type" -> "document".asJson, "source" -> source)
-      case OfferFileType.Jpeg | OfferFileType.Png =>
-        Json.obj("type" -> "image".asJson, "source" -> source)
+  private def base64(file: Array[Byte], mediaType: String): Json = Json.obj(
+    "type" -> "base64".asJson,
+    "media_type" -> mediaType.asJson,
+    "data" -> Base64.getEncoder.encodeToString(file).asJson
+  )
+
+  private def textBlock(text: String): Json =
+    Json.obj("type" -> "text".asJson, "text" -> text.asJson)
+
+  private def contentBlock(content: PassContent, prompts: ExtractionPrompts): Json =
+    content match
+      case PassContent.Image(bytes, fileType) =>
+        Json.obj("type" -> "image".asJson, "source" -> base64(bytes, fileType.mediaType))
+      case PassContent.ScannedPdf(bytes) =>
+        Json.obj(
+          "type" -> "document".asJson,
+          "source" -> base64(bytes, OfferFileType.Pdf.mediaType)
+        )
+      case PassContent.Text(chunk) =>
+        textBlock(s"${prompts.documentPartText(chunk)}\n\n${chunk.render}")
+
+  /** Extraction instructions plus the category's Leistungen, as sent after the document. */
+  def instructions(known: List[Leistung], prompts: ExtractionPrompts): String =
+    s"${prompts.offerExtraction}\n\n${prompts.knownText(known)}"
 
   def requestBody(
       model: String,
-      file: Array[Byte],
-      fileType: OfferFileType,
+      content: PassContent,
       known: List[Leistung],
-      prompts: ExtractionPrompts
+      prompts: ExtractionPrompts,
+      budget: PassBudget = PassBudget.default
   ): Json = Json.obj(
     "model" -> model.asJson,
-    "max_tokens" -> 16000.asJson,
+    "max_tokens" -> budget.maxOutputTokens.asJson,
     "output_config" -> Json.obj(
       "format" -> Json.obj("type" -> "json_schema".asJson, "schema" -> inputSchema)
     ),
@@ -280,11 +293,8 @@ object ClaudeOfferExtractor:
       Json.obj(
         "role" -> "user".asJson,
         "content" -> List(
-          fileBlock(file, fileType),
-          Json.obj(
-            "type" -> "text".asJson,
-            "text" -> s"${prompts.offerExtraction}\n\n${prompts.knownText(known)}".asJson
-          )
+          contentBlock(content, prompts),
+          textBlock(instructions(known, prompts))
         ).asJson
       )
     ).asJson

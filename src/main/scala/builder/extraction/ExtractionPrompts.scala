@@ -21,8 +21,12 @@ enum PromptLoadError extends Exception:
 final case class ExtractionPrompts(
     offerExtraction: String,
     knownEmpty: String,
-    knownHeading: String
+    knownHeading: String,
+    documentPart: String
 ):
+  /** Header of a text pass: where the text comes from and how page markers work. */
+  def documentPartText(chunk: TextChunk): String = documentPart.replace("{label}", chunk.label)
+
   def knownText(known: List[Leistung]): String =
     if known.isEmpty then knownEmpty
     else knownHeading + known.map(l => s"- ${l.id.value}: ${l.name.value}").mkString("\n")
@@ -34,7 +38,8 @@ object ExtractionPrompts:
       offer <- EitherT(loadText("prompts/offer-extraction.md"))
       empty <- EitherT(loadText("prompts/known-leistungen-empty.md"))
       heading <- EitherT(loadText("prompts/known-leistungen-heading.md"))
-    yield ExtractionPrompts(offer, empty, heading)).value
+      part <- EitherT(loadText("prompts/document-part.md"))
+    yield ExtractionPrompts(offer, empty, heading, part)).value
 
   def loadText(path: String): IO[Either[PromptLoadError, String]] =
     IO.blocking(Option(getClass.getClassLoader.getResource(path)))
