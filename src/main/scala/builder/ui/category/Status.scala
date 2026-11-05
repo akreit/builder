@@ -15,3 +15,9 @@ object Status:
     case CategoryStatus.Counted(_, _, _, _, _) => "gezaehlt"
     case CategoryStatus.NeedsDecision(_)       => "offen"
     case CategoryStatus.NoOffer                => "fehlt"
+
+  /** Short German status of a category, shown in its sidebar tab next to the status color. */
+  private[ui] def statusText(s: CategoryStatus): String = s match
+    case CategoryStatus.Counted(_, _, _, _, _) => "gezählt"
+    case CategoryStatus.NeedsDecision(_)       => "Entscheidung offen"
+    case CategoryStatus.NoOffer                => "kein Angebot"

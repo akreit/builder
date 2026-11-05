@@ -25,7 +25,7 @@ class CategoryTabsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
 
   /** Tab labels in document order. */
   private def tabLabels(body: String): List[String] =
-    "class=\"tab [^\"]*\"[^>]*>([^<]+)</a>".r.findAllMatchIn(body).map(_.group(1)).toList
+    "<span class=\"tab-name\">([^<]+)</span>".r.findAllMatchIn(body).map(_.group(1)).toList
 
   private def sections(body: String): List[String] =
     "<section class=\"kategorie\" data-kategorie=\"([^\"]+)\"".r
@@ -46,6 +46,24 @@ class CategoryTabsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
     page(uri"/projekte/demo/kategorien/heizung").asserting { (status, body, _) =>
       status shouldBe Status.Ok
       tabLabels(body) shouldBe expected
+    }
+  }
+
+  "each tab names its status in text, not only by color" in {
+    page(uri"/projekte/demo/kategorien/dach").asserting { (_, body, _) =>
+      val statuses = "<span class=\"tab-status\">([^<]+)</span>".r
+        .findAllMatchIn(body)
+        .map(_.group(1))
+        .toList
+      statuses shouldBe List(
+        "gezählt",
+        "kein Angebot",
+        "Entscheidung offen",
+        "gezählt",
+        "gezählt",
+        "kein Angebot"
+      )
+      body should include("aria-label=\"Fassadendämmung, Entscheidung offen\"")
     }
   }
 

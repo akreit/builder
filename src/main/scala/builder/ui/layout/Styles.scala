@@ -30,4 +30,6 @@ object Styles:
       |nav.tabs a{display:block;padding:.45rem .75rem;border:1px solid transparent;border-left:4px solid #ccc;border-radius:4px;text-decoration:none;color:#222}
       |nav.tabs a:hover{background:#e8ecf3}nav.tabs a.aktiv{background:#fff;font-weight:bold;border-color:#bbb}
       |nav.tabs a.gezaehlt{border-left-color:#5cb85c}nav.tabs a.offen{border-left-color:#f0ad4e}nav.tabs a.fehlt{border-left-color:#d9534f}
+      |nav.tabs .tab-name{display:block}nav.tabs .tab-status{display:block;font-size:.75rem;font-weight:normal;color:#555}
+      |section.kategorie{overflow-x:auto}
       |table.rangliste td{vertical-align:top}td.gesamt{font-size:1.05rem}section.gewichtung{margin:1rem 0}section.gewichtung input[type=number]{width:4rem}""".stripMargin

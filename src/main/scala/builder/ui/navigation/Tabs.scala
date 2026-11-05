@@ -24,13 +24,17 @@ object Tabs:
       ul(
         totals.categories.map(ct =>
           val isActive = active.exists(_.id == ct.category.id)
+          val name = ct.category.name.value
+          val status = statusText(ct.status)
           li(
             a(
               href := categoryUrl(project.id, ct.category.id),
               cls := s"tab ${statusClass(ct.status)}${if isActive then " aktiv" else ""}",
               attr("data-kategorie") := ct.category.id.value,
+              attr("aria-label") := s"$name, $status",
+              title := s"$name: $status",
               if isActive then attr("aria-current") := "page" else frag()
-            )(ct.category.name.value)
+            )(span(cls := "tab-name")(name), span(cls := "tab-status")(status))
           )
         )
       )

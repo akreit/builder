@@ -322,7 +322,7 @@ class LeistungenSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with E
         (seedStatus, _) <- edit(app, "aktion" -> "kategorie-loeschen", "kategorie" -> "dach")
       yield
         added should include("Gerüstbau")
-        renamed should include(">Gerüst</a>")
+        renamed should include("<span class=\"tab-name\">Gerüst</span>")
         deletedStatus shouldBe Status.Ok
         deleted should not include newId
         usedStatus shouldBe Status.Conflict
