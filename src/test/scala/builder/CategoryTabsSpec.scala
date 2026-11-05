@@ -150,13 +150,13 @@ class CategoryTabsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
         .flatMap(location => get(app, Uri.unsafeFromString(location)))
     ).asserting((status, body, _) =>
       status shouldBe Status.Ok
-      headerText(body) shouldBe Some("Dach")
+      headerText(body) shouldBe Some("Projekt Sanierung")
     )
   }
 
   "every category page has the header above the sidebar" in {
     page(uri"/projekte/demo/kategorien/elektrik").asserting { (_, body, _) =>
-      headerText(body) shouldBe Some("Dach")
+      headerText(body) shouldBe Some("Projekt Sanierung")
       body should include("class=\"mit-seitenleiste\"")
       body.indexOf("id=\"kopfzeile\"") should be < body.indexOf("<nav class=\"tabs\"")
     }

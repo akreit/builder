@@ -15,7 +15,7 @@ object CategoryPage:
       active.fold(s"Projekt – ${project.name}")(c => s"${c.name.value} – ${project.name}"),
       Some(project.name),
       true,
-      h1(s"Projekt: ${project.name}"),
+      h1(active.fold(project.name)(_.name.value)),
       p(cls := "hinweis")(
         s"Währung ${project.currency.code} · Beispieldaten (fiktive Firmen und Beträge) · hochgeladene Angebote werden gespeichert"
       ),

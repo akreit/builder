@@ -7,9 +7,9 @@ object Header:
   /** Name of the app, shown when a page belongs to no (named) project. */
   val AppName: String = "Builder"
 
-  /** The project's name if the page belongs to a project with a non-blank name, else the app's. */
+  /** "Projekt {name}" for a non-blank project name (no colon); else the app name. */
   def title(projectName: Option[String]): String =
-    projectName.map(_.trim).filter(_.nonEmpty).getOrElse(AppName)
+    projectName.map(_.trim).filter(_.nonEmpty).map(n => s"Projekt $n").getOrElse(AppName)
 
   private[ui] def bar(projectName: Option[String]): Frag =
     header(cls := "kopfzeile", id := "kopfzeile")(a(href := "/")(title(projectName)))
