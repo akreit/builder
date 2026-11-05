@@ -19,7 +19,7 @@ import java.time.Instant
 class RankingSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with EitherValues:
   import RawOffers.*
 
-  private val cat = CategoryId.from("dachfenster").value
+  private val cat = CategoryId.from("fenster").value
   private def leistung(id: String) =
     Leistung(LeistungId.from(id).value, cat, LeistungName.from(id).value)
   private val fenster = leistung("fenster")
@@ -29,7 +29,7 @@ class RankingSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with Eith
     val raw = dachfenster.copy(contractor = f(name))
     val status =
       if accepted then
-        UploadStatus.Accepted(raw, Fixtures.offer(id, Fixtures.category("dachfenster", "D"), 100))
+        UploadStatus.Accepted(raw, Fixtures.offer(id, Fixtures.category("fenster", "D"), 100))
       else
         UploadStatus.Rejected(
           raw,
@@ -203,7 +203,7 @@ class RankingSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with Eith
           app,
           Request[IO](
             Method.POST,
-            Uri.unsafeFromString("/ui/projects/demo/categories/dachfenster/angebote")
+            Uri.unsafeFromString("/ui/projects/demo/categories/fenster/angebote")
           )
             .withEntity(mp)
             .putHeaders(mp.headers)
@@ -215,7 +215,7 @@ class RankingSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with Eith
     run(
       app,
       Request[IO](Method.POST, Uri.unsafeFromString("/ui/projects/demo/aenderungen"))
-        .withEntity(UrlForm(fields*))
+        .withEntity(UrlForm((("ansicht" -> "fenster") +: fields)*))
         .putHeaders(hx)
     )
 
@@ -252,7 +252,12 @@ class RankingSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with Eith
           )
         (_, restarted) <- TestApp
           .resource(dir, extractor)
-          .use(app => run(app, Request[IO](Method.GET, Uri.unsafeFromString("/"))))
+          .use(app =>
+            run(
+              app,
+              Request[IO](Method.GET, Uri.unsafeFromString("/projekte/demo/kategorien/fenster"))
+            )
+          )
         (badStars, _) <- TestApp
           .resource(dir, extractor)
           .use(app => edit(app, "aktion" -> "bewertung", "firma" -> "X", "sterne" -> "6"))

@@ -85,19 +85,30 @@ object SampleData:
       cn <- CategoryName.from(name)
     yield Category(cid, cn)
 
+  /** The trade categories of a project, in tab order (explicit, not alphabetical). */
+  val categories: Either[DomainError, List[Category]] =
+    List(
+      "dach" -> "Dach",
+      "fenster" -> "Fenster",
+      "fassadendaemmung" -> "Fassadendämmung",
+      "elektrik" -> "Elektrik",
+      "heizung" -> "Heizung",
+      "innenausbau" -> "Innenausbau"
+    ).traverse(category.tupled)
+
   val project: Either[DomainError, Project] =
     for
       id <- ProjectId.from("demo")
-      gauben <- category("gauben", "Gauben")
-      daemmung <- category("daemmung", "Dämmung")
-      spengler <- category("spenglerarbeiten", "Spenglerarbeiten")
-      balkon <- category("balkondaemmung", "Balkondämmung")
-      fenster <- category("dachfenster", "Dachfenster")
-      sonstiges <- category("sonstiges", "Sonstiges")
+      cats <- categories
+      dach <- category("dach", "Dach")
+      fenster <- category("fenster", "Fenster")
+      fassade <- category("fassadendaemmung", "Fassadendämmung")
+      elektrik <- category("elektrik", "Elektrik")
+      heizung <- category("heizung", "Heizung")
       g1 <- offer(
         "gauben-a",
         "Musterzimmerei Holzwurm GmbH",
-        gauben.id,
+        dach.id,
         8,
         List(
           Position("Schleppgaube abbinden und aufstellen", 2, "Stk", 625_000),
@@ -107,50 +118,50 @@ object SampleData:
       g2 <- offer(
         "gauben-b",
         "Zimmerei Beispiel & Söhne",
-        gauben.id,
+        dach.id,
         12,
         List(Position("Satteldachgaube komplett", 2, "Stk", 715_000))
       )
       d1 <- offer(
-        "daemmung-a",
+        "fassade-a",
         "Musterzimmerei Holzwurm GmbH",
-        daemmung.id,
+        fassade.id,
         8,
         List(
-          Position("Zwischensparrendämmung WLG 035, 200 mm", 120, "m²", 4_850),
-          Position("Dampfbremse verlegen und verkleben", 120, "m²", 1_275)
+          Position("WDVS Mineralwolle WLG 035, 200 mm", 120, "m²", 4_850),
+          Position("Armierung und Oberputz", 120, "m²", 1_275)
         )
       )
       d2 <- offer(
-        "daemmung-b",
+        "fassade-b",
         "Holzbau Fiktiv KG",
-        daemmung.id,
+        fassade.id,
         15,
-        List(Position("Aufsparrendämmung Holzfaser, 160 mm", 120, "m²", 8_990))
+        List(Position("Holzfaser-Fassadendämmung, 160 mm", 120, "m²", 8_990))
       )
-      s1 <- offer(
-        "spengler-a",
-        "Spenglerei Probe",
-        spengler.id,
+      h1 <- offer(
+        "heizung-a",
+        "Heizungsbau Probe",
+        heizung.id,
         20,
         List(
-          Position("Dachrinne Titanzink, halbrund", 24, "m", 6_450),
-          Position("Fallrohr Titanzink", 12, "m", 5_200)
+          Position("Heizungsrohr Kupfer verlegen", 24, "m", 6_450),
+          Position("Heizkörper anschließen", 12, "Stk", 5_200)
         )
       )
-      b1 <- offer("balkon-a", "Zimmerei Beispiel & Söhne", balkon.id, 22, Nil, 480_000)
+      e1 <- offer("elektrik-a", "Elektro Beispiel & Söhne", elektrik.id, 22, Nil, 480_000)
       p <- Project.from(
         id = id,
         name = "Dach",
         currency = eur,
-        categories = List(gauben, daemmung, spengler, balkon, fenster, sonstiges),
+        categories = cats,
         workPackages = List(
-          WorkPackage(gauben.id, "Zwei Gauben straßenseitig", List("Dachgeschoss")),
-          WorkPackage(daemmung.id, "Dach komplett dämmen", List("Dachgeschoss")),
-          WorkPackage(fenster.id, "Drei Dachfenster tauschen", List("Dachgeschoss"))
+          WorkPackage(dach.id, "Zwei Gauben straßenseitig", List("Dachgeschoss")),
+          WorkPackage(fassade.id, "Fassade komplett dämmen", List("Außenwand")),
+          WorkPackage(fenster.id, "Drei Fenster tauschen", List("Dachgeschoss"))
         ),
-        offers = List(g1, g2, d1, d2, s1, b1),
-        favorites = Map(gauben.id -> g1.id)
+        offers = List(g1, g2, d1, d2, h1, e1),
+        favorites = Map(dach.id -> g1.id)
       )
     yield p
 
@@ -158,12 +169,12 @@ object SampleData:
   val leistungen: Either[DomainError, List[(ProjectId, Leistung)]] =
     for
       pid <- ProjectId.from("demo")
-      fenster <- CategoryId.from("dachfenster")
+      fenster <- CategoryId.from("fenster")
       ls <- List(
-        "dachfenster-fenster" -> "Fenster inkl. Zubehör",
-        "dachfenster-einbau" -> "Einbau",
-        "dachfenster-innenausbau" -> "Innenausbau",
-        "dachfenster-entsorgung" -> "Entsorgung"
+        "fenster-fenster" -> "Fenster inkl. Zubehör",
+        "fenster-einbau" -> "Einbau",
+        "fenster-innenausbau" -> "Innenausbau",
+        "fenster-entsorgung" -> "Entsorgung"
       ).traverse((id, name) =>
         (LeistungId.from(id), LeistungName.from(name)).mapN(Leistung(_, fenster, _))
       )

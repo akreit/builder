@@ -175,15 +175,15 @@ object RawOffers:
     */
   val dachfensterMitLeistungen: RawOffer = dachfenster.copy(
     lineItems = List(
-      dachfenster.lineItems(0).copy(leistung = Some("dachfenster-fenster")),
+      dachfenster.lineItems(0).copy(leistung = Some("fenster-fenster")),
       dachfenster.lineItems(1).copy(leistung = Some("neu-1"))
     ),
     neueLeistungen = Some(List(RawNeueLeistung("neu-1", "Gerüst"))),
     abdeckung = Some(
       List(
-        RawAbdeckung("dachfenster-fenster", "enthalten", 2, Confidence.High),
-        RawAbdeckung("dachfenster-einbau", "unklar", 2, Confidence.Medium),
-        RawAbdeckung("dachfenster-innenausbau", "ausgeschlossen", 3, Confidence.High),
+        RawAbdeckung("fenster-fenster", "enthalten", 2, Confidence.High),
+        RawAbdeckung("fenster-einbau", "unklar", 2, Confidence.Medium),
+        RawAbdeckung("fenster-innenausbau", "ausgeschlossen", 3, Confidence.High),
         RawAbdeckung("neu-1", "enthalten", 2, Confidence.Low)
       )
     )

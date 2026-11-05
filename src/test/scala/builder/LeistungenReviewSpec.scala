@@ -18,7 +18,7 @@ class LeistungenReviewSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers 
   import RawOffers.*
 
   private val pdf: Array[Byte] = "%PDF-1.7\nfiktives Angebot".getBytes("UTF-8")
-  private val fenster = CategoryId.from("dachfenster").value
+  private val fenster = CategoryId.from("fenster").value
   private def lid(s: String) = LeistungId.from(s).value
   private val seeded = SampleData.leistungen.value.map(_._2)
 
@@ -43,7 +43,7 @@ class LeistungenReviewSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers 
   "a reference to a Leistung of another category stays unmapped" in {
     val other = Leistung(
       lid("gauben-blech"),
-      CategoryId.from("gauben").value,
+      CategoryId.from("dach").value,
       LeistungName.from("Blech").value
     )
     val raw = dachfenster.copy(
@@ -100,7 +100,7 @@ class LeistungenReviewSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers 
       app,
       htmx(
         Request[IO](Method.POST, Uri.unsafeFromString("/ui/projects/demo/aenderungen"))
-          .withEntity(UrlForm(fields*))
+          .withEntity(UrlForm((("ansicht" -> "fenster") +: fields)*))
       )
     )
 
@@ -122,7 +122,7 @@ class LeistungenReviewSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers 
     val extractor = SwitchingExtractor(gauben)
     TestApp.fresh(extractor).use { app =>
       for
-        (_, g) <- upload(app, "gauben")
+        (_, g) <- upload(app, "dach")
         blech = idOf(g, "Gaubenblech")
         // The extractor (wrongly) points the Dachfenster items at the Gauben Leistung.
         _ <- extractor.set(
@@ -131,8 +131,8 @@ class LeistungenReviewSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers 
             abdeckung = Some(List(RawAbdeckung(blech, "enthalten", 2, Confidence.High)))
           )
         )
-        (_, html) <- upload(app, "dachfenster")
-        offer = offerIn(html, "dachfenster")
+        (_, html) <- upload(app, "fenster")
+        offer = offerIn(html, "fenster")
         (assignStatus, assign) <- edit(
           app,
           "aktion" -> "position-zuordnen",
@@ -161,8 +161,8 @@ class LeistungenReviewSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers 
   "unknown Leistungen are 404, unknown positions 422, oversized forms 413" in {
     TestApp.fresh(RecordingExtractor(List(dachfensterMitLeistungen))).use { app =>
       for
-        (_, html) <- upload(app, "dachfenster")
-        offer = offerIn(html, "dachfenster")
+        (_, html) <- upload(app, "fenster")
+        offer = offerIn(html, "fenster")
         (missing, _) <- edit(
           app,
           "aktion" -> "leistung-umbenennen",
@@ -177,7 +177,7 @@ class LeistungenReviewSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers 
           "ziel" -> ""
         )
         (tooBig, _) <- edit(app, "aktion" -> "kategorie-neu", "name" -> ("x" * (20 * 1024)))
-        (used, _) <- edit(app, "aktion" -> "kategorie-loeschen", "kategorie" -> "dachfenster")
+        (used, _) <- edit(app, "aktion" -> "kategorie-loeschen", "kategorie" -> "fenster")
       yield
         missing shouldBe Status.NotFound
         badItem shouldBe Status.UnprocessableContent
@@ -194,8 +194,8 @@ class LeistungenReviewSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers 
     )
     TestApp.fresh(RecordingExtractor(List(dachfensterMitLeistungen, off))).use { app =>
       for
-        (_, one) <- upload(app, "dachfenster")
-        (_, two) <- upload(app, "dachfenster")
+        (_, one) <- upload(app, "fenster")
+        (_, two) <- upload(app, "fenster")
       yield
         mismatches(one) shouldBe List("false")
         one should include("5.010,00")
@@ -212,7 +212,7 @@ class LeistungenReviewSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers 
       )
     )
     TestApp.fresh(RecordingExtractor(List(incomplete))).use { app =>
-      upload(app, "dachfenster").map { (_, html) =>
+      upload(app, "fenster").map { (_, html) =>
         mismatches(html) shouldBe List("false")
         html should not include ("Weicht vom Netto ab")
       }
@@ -223,7 +223,7 @@ class LeistungenReviewSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers 
     val many = (1 to 13).toList.map(i => RawNeueLeistung(s"neu-$i", s"Leistung $i"))
     TestApp.fresh(RecordingExtractor(List(dachfenster.copy(neueLeistungen = Some(many))))).use {
       app =>
-        upload(app, "dachfenster").map { (_, html) =>
+        upload(app, "fenster").map { (_, html) =>
           html should include("3 weitere Leistungsvorschläge verworfen")
           idOf(html, "Leistung 10") should not be empty
           idOf(html, "Leistung 11") shouldBe empty
@@ -237,18 +237,23 @@ class LeistungenReviewSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers 
     TestApp.tempDir.use { dir =>
       val extractor = RecordingExtractor(List(dachfenster))
       for
-        (_, first) <- TestApp.resource(dir, extractor).use(app => upload(app, "dachfenster"))
+        (_, first) <- TestApp.resource(dir, extractor).use(app => upload(app, "fenster"))
         _ <- TestDb.sql(
           dir,
           "INSERT INTO favorites SELECT project_id, category_id, id FROM uploads"
         )
         (_, html) <- TestApp
           .resource(dir, extractor)
-          .use(app => run(app, Request[IO](Method.GET, Uri.unsafeFromString("/"))))
+          .use(app =>
+            run(
+              app,
+              Request[IO](Method.GET, Uri.unsafeFromString("/projekte/demo/kategorien/fenster"))
+            )
+          )
         counts <- List("uploads", "offers o JOIN uploads u USING (project_id, id)", "favorites")
           .flatTraverse(t => TestDb.ints(dir, s"SELECT count(*)::int FROM $t"))
         orphanFavorite <- TestDb
-          .sql(dir, "INSERT INTO favorites VALUES ('demo', 'gauben', 'gibtsnicht')")
+          .sql(dir, "INSERT INTO favorites VALUES ('demo', 'dach', 'gibtsnicht')")
           .attempt
       yield
         first should include("Zimmerei Erfunden GmbH")

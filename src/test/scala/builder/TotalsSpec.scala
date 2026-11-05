@@ -100,6 +100,6 @@ class TotalsSpec extends AnyFunSuite with Matchers with EitherValues with ScalaC
   test("sample project Dach: favorite, single offers and a Pauschalangebot are counted") {
     val t = Totals.compute(SampleData.project.value)
     t.net shouldBe eur(1_414_650 + 217_200 + 480_000)
-    t.undecidedCategories.map(_.name.value) shouldBe List("Dämmung")
-    t.missingCategories.map(_.name.value) shouldBe List("Dachfenster", "Sonstiges")
+    t.undecidedCategories.map(_.name.value) shouldBe List("Fassadendämmung")
+    t.missingCategories.map(_.name.value) shouldBe List("Fenster", "Innenausbau")
   }

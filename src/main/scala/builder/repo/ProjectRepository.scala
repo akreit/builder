@@ -664,6 +664,31 @@ object PostgresProjectRepository:
             PRIMARY KEY (project_id, contractor_key))""".command,
       sql"""CREATE TABLE weights(project_id TEXT NOT NULL, criterion TEXT NOT NULL,
             weight INTEGER NOT NULL, PRIMARY KEY (project_id, criterion))""".command
+    ),
+    // New default trade categories (Dach, Fenster, Fassadendämmung, Elektrik, Heizung,
+    // Innenausbau). Data stored for the retired default categories (only test data) is removed:
+    // their uploaded offers (cascading to uploads, favorites, assignments, coverage), their
+    // Leistungen, category edits and favorites, and the retired seed offers. Categories added by
+    // users keep their data.
+    2 -> List(
+      sql"""DELETE FROM offers o WHERE o.id IN ('daemmung-a', 'daemmung-b', 'spengler-a', 'balkon-a')
+            OR EXISTS (SELECT 1 FROM uploads u WHERE u.project_id = o.project_id AND u.id = o.id
+            AND u.category_id IN ('gauben', 'daemmung', 'spenglerarbeiten', 'balkondaemmung',
+            'dachfenster', 'sonstiges'))""".command,
+      sql"""DELETE FROM favorites WHERE category_id IN ('gauben', 'daemmung', 'spenglerarbeiten',
+            'balkondaemmung', 'dachfenster', 'sonstiges')""".command,
+      sql"""DELETE FROM item_leistung i USING leistungen l
+            WHERE i.project_id = l.project_id AND i.leistung_id = l.id
+            AND l.category_id IN ('gauben', 'daemmung', 'spenglerarbeiten', 'balkondaemmung',
+            'dachfenster', 'sonstiges')""".command,
+      sql"""DELETE FROM abdeckung a USING leistungen l
+            WHERE a.project_id = l.project_id AND a.leistung_id = l.id
+            AND l.category_id IN ('gauben', 'daemmung', 'spenglerarbeiten', 'balkondaemmung',
+            'dachfenster', 'sonstiges')""".command,
+      sql"""DELETE FROM leistungen WHERE category_id IN ('gauben', 'daemmung', 'spenglerarbeiten',
+            'balkondaemmung', 'dachfenster', 'sonstiges')""".command,
+      sql"""DELETE FROM categories WHERE id IN ('gauben', 'daemmung', 'spenglerarbeiten',
+            'balkondaemmung', 'dachfenster', 'sonstiges')""".command
     )
   )
 

@@ -78,5 +78,5 @@ class ProjectSpec extends AnyFunSuite with Matchers with EitherValues:
 
   test("the sample project is valid") {
     SampleData.project.value.categories.map(_.name.value) shouldBe
-      List("Gauben", "Dämmung", "Spenglerarbeiten", "Balkondämmung", "Dachfenster", "Sonstiges")
+      List("Dach", "Fenster", "Fassadendämmung", "Elektrik", "Heizung", "Innenausbau")
   }

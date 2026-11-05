@@ -69,7 +69,7 @@ class ClaudeOfferExtractorSpec extends AsyncFreeSpec with AsyncIOSpec with Match
         .downField("text")
         .as[String]
         .getOrElse("")
-      text should include("dachfenster-einbau: Einbau")
+      text should include("fenster-einbau: Einbau")
       text should include("Fenster inkl. Zubehör")
       text should include("Bevorzuge immer eine vorhandene Leistung")
     }

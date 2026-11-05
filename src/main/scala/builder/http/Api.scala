@@ -118,6 +118,11 @@ object ApiError:
     oneOfVariant(StatusCode.InternalServerError, jsonBody[StorageFailed])
   )
 
+/** Response of the start route: a redirect to the first tab, or the page without categories. */
+enum Landing:
+  case Redirect(location: String)
+  case Page(html: String)
+
 /** Error of an HTML endpoint: status code plus a German HTML message. */
 final case class HtmlError(status: StatusCode, html: String)
 
@@ -159,9 +164,26 @@ object Endpoints:
   /** Endpoints whose decode failures are rendered as htmx error fragments. */
   val htmxNames: Set[String] = Set("upload-offer", "mark-favorite", "edit")
 
-  /** Projektübersicht of the home project. */
-  val overviewPage =
-    endpoint.get.in("").out(htmlBodyUtf8).errorOut(htmlError)
+  /** Start route of the home project: redirects to its first category tab. */
+  val landing =
+    endpoint.get
+      .in("")
+      .out(
+        oneOf[Landing](
+          oneOfVariant(
+            statusCode(StatusCode.SeeOther).and(header[String]("Location")).mapTo[Landing.Redirect]
+          ),
+          oneOfVariant(statusCode(StatusCode.Ok).and(htmlBodyUtf8).mapTo[Landing.Page])
+        )
+      )
+      .errorOut(htmlError)
+
+  /** The page (tab) of one category; an unknown project or category is 404. */
+  val categoryPage =
+    endpoint.get
+      .in("projekte" / path[String]("projectId") / "kategorien" / path[String]("categoryId"))
+      .out(htmlBodyUtf8)
+      .errorOut(htmlError)
 
   /** htmx fragment error: retargets the swap into the layout's `#fehler` slot. */
   val fragmentError: EndpointOutput[HtmlError] =
@@ -215,7 +237,7 @@ object Endpoints:
       .in("ui" / "projects" / path[String]("projectId") / "aenderungen")
       .securityIn(htmxHeaders)
       .in(formBody[Map[String, String]])
-      .out(htmlBodyUtf8)
+      .out(header[String]("HX-Push-Url").and(htmlBodyUtf8))
       .errorOut(fragmentError)
       .maxRequestBodyLength(Api.MaxEditBytes)
 
@@ -318,25 +340,50 @@ final class Api(
           )
 
   private def notFound(what: String): HtmlError =
-    HtmlError(StatusCode.NotFound, Pages.message(s"$what nicht gefunden").render)
+    HtmlError(StatusCode.NotFound, Pages.message(s"$what nicht gefunden"))
 
-  private val overview: IO[Either[HtmlError, String]] =
+  private def pageError(e: RepoError): HtmlError = e match
+    case RepoError.Storage(code) =>
+      HtmlError(
+        StatusCode.InternalServerError,
+        Pages.message(s"Datenbankfehler (Code ${code.value})")
+      )
+    case RepoError.CategoryNotFound(_) => notFound("Kategorie")
+    case RepoError.ProjectNotFound(_) | RepoError.OfferNotFound(_) | RepoError.LeistungNotFound(_) |
+        RepoError.ItemNotFound(_, _) | RepoError.Invalid(_) | RepoError.Rejected(_) =>
+      notFound("Projekt")
+
+  private val landing: IO[Either[HtmlError, Landing]] =
     repo
       .find(home)
-      .map(_.map(v => Pages.overview(v)).left.map {
-        case RepoError.Storage(code) =>
-          HtmlError(
-            StatusCode.InternalServerError,
-            Pages.message(s"Datenbankfehler (Code ${code.value})").render
+      .map(
+        _.map(v =>
+          Pages.activeCategory(v, None) match
+            case Some(c) => Landing.Redirect(Pages.categoryUrl(v.project.id, c.id))
+            case None    => Landing.Page(Pages.categoryPage(v, None))
+        ).left.map(pageError)
+      )
+
+  private def categoryPageLogic(
+      projectId: String,
+      categoryId: String
+  ): IO[Either[HtmlError, String]] =
+    (ProjectId.from(projectId), CategoryId.from(categoryId)).tupled match
+      case Left(_)       => IO.pure(Left(notFound("Seite")))
+      case Right((p, c)) =>
+        repo
+          .find(p)
+          .map(
+            _.flatMap(v =>
+              v.project.categories
+                .find(_.id == c)
+                .toRight(RepoError.CategoryNotFound(c))
+                .map(cat => Pages.categoryPage(v, Some(cat)))
+            ).left.map(pageError)
           )
-        case RepoError.ProjectNotFound(_) | RepoError.CategoryNotFound(_) |
-            RepoError.OfferNotFound(_) | RepoError.LeistungNotFound(_) |
-            RepoError.ItemNotFound(_, _) | RepoError.Invalid(_) | RepoError.Rejected(_) =>
-          notFound("Projekt")
-      })
 
   private def fragmentError(status: StatusCode, text: String): HtmlError =
-    HtmlError(status, Pages.errorFragment(text).render)
+    HtmlError(status, Pages.errorFragment(text))
 
   /** CSRF guard: only htmx requests, and an Origin (if sent) must match the Host. */
   private def checkRequest(h: HtmxHeaders): IO[Either[HtmlError, Unit]] = IO.pure {
@@ -362,8 +409,9 @@ final class Api(
       case Left(e) => IO.pure(Left(fragmentError(StatusCode.BadRequest, Pages.describe(e))))
       case Right((p, c, o)) =>
         repo.setFavorite(p, c, o).map {
-          case Right(view) => Right(Pages.projectFragment(view).render)
-          case Left(e)     => Left(repoError(e))
+          case Right(view) =>
+            Right(Pages.projectFragment(view, Pages.activeCategory(view, Some(c))))
+          case Left(e) => Left(repoError(e))
         }
 
   private def repoError(e: RepoError): HtmlError = e match
@@ -384,14 +432,24 @@ final class Api(
     case RepoError.Storage(code) =>
       fragmentError(StatusCode.InternalServerError, s"Datenbankfehler (Code ${code.value})")
 
+  /** Re-renders the tab the edit came from (field `ansicht`); if that category is gone, the first
+    * tab, whose URL is pushed so the address bar matches.
+    */
   private def editLogic(
       projectId: String,
       form: Map[String, String]
-  ): IO[Either[HtmlError, String]] =
+  ): IO[Either[HtmlError, (String, String)]] =
     (ProjectId.from(projectId).left.map(Pages.describe), Api.parseEdit(form)).tupled match
       case Left(text)    => IO.pure(Left(fragmentError(StatusCode.BadRequest, text)))
       case Right((p, e)) =>
-        repo.edit(p, e).map(_.map(Pages.projectFragment(_).render).left.map(repoError))
+        val requested = form.get("ansicht").flatMap(CategoryId.from(_).toOption)
+        repo
+          .edit(p, e)
+          .map(_.map { v =>
+            val active = Pages.activeCategory(v, requested)
+            val url = active.fold("/")(c => Pages.categoryUrl(v.project.id, c.id))
+            (url, Pages.projectFragment(v, active))
+          }.left.map(repoError))
 
   private def newOfferId: IO[Either[DomainError, OfferId]] =
     UUIDGen[IO].randomUUID.map(u => OfferId.from(s"upl-${u.toString.replace("-", "").take(12)}"))
@@ -474,7 +532,12 @@ final class Api(
                 ).flatMap {
                   case Left(e)   => IO.pure(Left(repoError(e)))
                   case Right(()) =>
-                    repo.find(p).map(_.map(Pages.projectFragment(_).render).left.map(repoError))
+                    repo
+                      .find(p)
+                      .map(
+                        _.map(v => Pages.projectFragment(v, Pages.activeCategory(v, Some(c)))).left
+                          .map(repoError)
+                      )
                 }
             }
         }
@@ -507,7 +570,8 @@ final class Api(
     List(
       Endpoints.health.serverLogicSuccess[IO](_ => IO.pure(HealthResponse("ok"))),
       Endpoints.totals.serverLogic[IO](totalsLogic),
-      Endpoints.overviewPage.serverLogic[IO](_ => overview),
+      Endpoints.landing.serverLogic[IO](_ => landing),
+      Endpoints.categoryPage.serverLogic[IO](categoryPageLogic.tupled),
       Endpoints.markFavorite
         .serverSecurityLogic[Unit, IO](checkRequest)
         .serverLogic(_ => favoriteLogic.tupled),

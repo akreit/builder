@@ -9,7 +9,8 @@ import java.time.LocalDate
 import scala.util.Try
 
 /** Angebots-Detailsicht: ausgelesene Felder und die Positionsliste (je Position als natives
-  * `<details>`/`<summary>`, standardmäßig eingeklappt). Kein JS-/htmx-Zustand.
+  * `<details>`/`<summary>`, standardmäßig eingeklappt). Kein JS-/htmx-Zustand. Dieselbe
+  * Positionsliste wird in Matrix-Zellen des Leistungsvergleichs wiederverwendet.
   */
 object OfferDetail:
   private def pageRef(f: Field): Frag =
@@ -106,6 +107,16 @@ object OfferDetail:
           )
         )
 
+  /** Collapsible position list (0-based indices as shown). Empty input yields an empty fragment.
+    * Each position is a native `<details>` without `open`, so collapsed by default. Shared by the
+    * offer detail view and Leistungsvergleich matrix cells.
+    */
+  def collapsiblePositions(items: List[(Int, RawLineItem)], cur: Currency): Frag =
+    items match
+      case Nil            => frag()
+      case all @ (_ :: _) =>
+        div(cls := "positionen")(all.map((i, li) => positionRow(i, li, cur)))
+
   /** Full offer detail block: header fields, collapsible positions, notes and exclusions. */
   def render(raw: RawOffer, cur: Currency): Frag =
     frag(
@@ -115,11 +126,7 @@ object OfferDetail:
         )
       ),
       if raw.lineItems.isEmpty then p(cls := "hinweis")("Keine Einzelpositionen (Pauschalangebot).")
-      else
-        div(cls := "positionen")(
-          raw.lineItems.zipWithIndex.map((li, i) => positionRow(i, li, cur))
-        )
-      ,
+      else collapsiblePositions(raw.lineItems.zipWithIndex.map((li, i) => i -> li), cur),
       textList("Hinweise", raw.notes),
       textList("Nicht enthalten", raw.exclusions)
     )
