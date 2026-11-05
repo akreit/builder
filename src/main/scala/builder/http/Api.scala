@@ -340,13 +340,13 @@ final class Api(
           )
 
   private def notFound(what: String): HtmlError =
-    HtmlError(StatusCode.NotFound, Pages.message(s"$what nicht gefunden").render)
+    HtmlError(StatusCode.NotFound, Pages.message(s"$what nicht gefunden"))
 
   private def pageError(e: RepoError): HtmlError = e match
     case RepoError.Storage(code) =>
       HtmlError(
         StatusCode.InternalServerError,
-        Pages.message(s"Datenbankfehler (Code ${code.value})").render
+        Pages.message(s"Datenbankfehler (Code ${code.value})")
       )
     case RepoError.CategoryNotFound(_) => notFound("Kategorie")
     case RepoError.ProjectNotFound(_) | RepoError.OfferNotFound(_) | RepoError.LeistungNotFound(_) |
@@ -383,7 +383,7 @@ final class Api(
           )
 
   private def fragmentError(status: StatusCode, text: String): HtmlError =
-    HtmlError(status, Pages.errorFragment(text).render)
+    HtmlError(status, Pages.errorFragment(text))
 
   /** CSRF guard: only htmx requests, and an Origin (if sent) must match the Host. */
   private def checkRequest(h: HtmxHeaders): IO[Either[HtmlError, Unit]] = IO.pure {
@@ -410,7 +410,7 @@ final class Api(
       case Right((p, c, o)) =>
         repo.setFavorite(p, c, o).map {
           case Right(view) =>
-            Right(Pages.projectFragment(view, Pages.activeCategory(view, Some(c))).render)
+            Right(Pages.projectFragment(view, Pages.activeCategory(view, Some(c))))
           case Left(e) => Left(repoError(e))
         }
 
@@ -448,7 +448,7 @@ final class Api(
           .map(_.map { v =>
             val active = Pages.activeCategory(v, requested)
             val url = active.fold("/")(c => Pages.categoryUrl(v.project.id, c.id))
-            (url, Pages.projectFragment(v, active).render)
+            (url, Pages.projectFragment(v, active))
           }.left.map(repoError))
 
   private def newOfferId: IO[Either[DomainError, OfferId]] =
@@ -535,9 +535,7 @@ final class Api(
                     repo
                       .find(p)
                       .map(
-                        _.map(v =>
-                          Pages.projectFragment(v, Pages.activeCategory(v, Some(c))).render
-                        ).left
+                        _.map(v => Pages.projectFragment(v, Pages.activeCategory(v, Some(c)))).left
                           .map(repoError)
                       )
                 }
