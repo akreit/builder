@@ -34,14 +34,13 @@ object Main extends IOApp.Simple:
 
   def run: IO[Unit] =
     val app = for
-      project <- cats.effect.Resource.eval(
+      // Routing ID only: startup creates no project or other application data.
+      home <- cats.effect.Resource.eval(
         IO.fromEither(
-          SampleData.project.left.map(e => IllegalStateException(s"Invalid sample data: $e"))
-        )
-      )
-      leistungen <- cats.effect.Resource.eval(
-        IO.fromEither(
-          SampleData.leistungen.left.map(e => IllegalStateException(s"Invalid sample data: $e"))
+          builder.domain.ProjectId
+            .from("default")
+            .left
+            .map(e => IllegalStateException(s"Invalid home project ID: $e"))
         )
       )
       db <- cats.effect.Resource.eval(
@@ -53,9 +52,7 @@ object Main extends IOApp.Simple:
         )
       )
       repo <- PostgresProjectRepository.resource(
-        db,
-        List(project),
-        leistungen
+        db
       )
       claude <- ClaudeOfferExtractor.resource(ApiKey.fromEnv, model)
       passes <- cats.effect.Resource.eval(OfferPass.bounded(claude, permits = 2))
@@ -67,7 +64,7 @@ object Main extends IOApp.Simple:
         .withIdleTimeout(5.minutes)
         .withRequestHeaderReceiveTimeout(10.seconds)
         .withHttpApp(
-          Api(repo, project.id, extractor, FileStore(dataDir.resolve("angebote"))).routes.orNotFound
+          Api(repo, home, extractor, FileStore(dataDir.resolve("angebote"))).routes.orNotFound
         )
         .build
     yield (server, db)

@@ -21,9 +21,8 @@ sbt run          # start the HTTP server (port 8080, override with PORT=...)
 
 ```sh
 curl http://localhost:8080/health
-curl http://localhost:8080/projects/demo/totals
-curl -i http://localhost:8080/       # 303 zur ersten Kategorie (/projekte/demo/kategorien/dach)
-curl -X POST http://localhost:8080/ui/projects/demo/categories/daemmung/favorite/daemmung-b
+curl http://localhost:8080/health
+curl -i http://localhost:8080/       # 404 bei leerer Datenbank
 ```
 
 ## Lokal mit Docker starten
@@ -99,7 +98,7 @@ Sources live in `docs/`. The output goes to `target/docs/`.
 ## Layout (`src/main/scala/builder`)
 
 - `Main.scala`: Ember server entry point
-- `SampleData.scala`: the in-memory `demo` project "Dach" (fictional sample offers)
+- `src/test/scala/builder/SampleData.scala`: test-only fixtures; runtime startup creates no projects, categories, offers or Leistungen.
 - `domain/`: model, money, extracted offer data, errors
 - `totals/`: running-total calculation
 - `repo/`: project repository (Postgres via Skunk, versioned migrations)

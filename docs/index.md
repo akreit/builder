@@ -28,16 +28,6 @@ item has a known total, those totals must sum to net (`LineSumCheck.Consistent`)
 unit price and total are all known, the total must be `unitPrice × quantity` rounded HALF_UP to
 cents.
 
-```scala mdoc
-import builder.SampleData
-import builder.totals.Totals
-
-SampleData.project.map { p =>
-  val t = Totals.compute(p)
-  (t.net.show, t.gross.show, t.missingCategories.map(_.name.value), t.undecidedCategories.map(_.name.value))
-}
-```
-
 ## HTTP
 
 - `GET /health`
@@ -46,4 +36,4 @@ SampleData.project.map { p =>
 - `GET /projekte/{projectId}/kategorien/{categoryId}` page of one category (German HTML; unknown project or category: 404)
 - `POST /ui/projects/{id}/categories/{categoryId}/favorite/{offerId}` (htmx; returns the re-rendered fragment)
 
-Run with `sbt run` and try `curl localhost:8080/projects/demo/totals`.
+Run with `sbt run` and try `curl localhost:8080/health`. A fresh database stays empty; `/` and unknown projects return 404.

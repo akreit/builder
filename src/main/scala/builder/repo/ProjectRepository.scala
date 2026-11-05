@@ -153,14 +153,14 @@ private[repo] final case class CoverageRow(
     manual: Boolean
 )
 
-/** Postgres-backed repository. Projects (categories, work packages, seed offers) come from `seeds`;
-  * uploads and favorites are stored in the database, so they survive restarts. Every read
-  * re-validates stored extractions with the domain smart constructors.
+/** Postgres-backed repository. Project definitions come from the supplied `projects`; uploads and
+  * favorites are stored in the database, so they survive restarts. Every read re-validates stored
+  * extractions with the domain smart constructors.
   */
 final class PostgresProjectRepository private (
     db: Postgres,
     lock: Mutex[IO],
-    seeds: Map[ProjectId, Project]
+    projects: Map[ProjectId, Project]
 ) extends ProjectRepository:
   import PostgresProjectRepository.*
 
@@ -240,7 +240,7 @@ final class PostgresProjectRepository private (
     )
 
   private def load(id: ProjectId): IO[Either[RepoError, ProjectView]] =
-    seeds.lift(id) match
+    projects.lift(id) match
       case None       => IO.pure(Left(RepoError.ProjectNotFound(id)))
       case Some(seed) =>
         (for
@@ -695,41 +695,20 @@ object PostgresProjectRepository:
   /** Arbitrary constant for `pg_advisory_xact_lock`, so parallel starts migrate one at a time. */
   private val MigrationLock = 4711_2026L
 
-  private def migrate(
-      db: Postgres,
-      seeds: List[Project],
-      leistungen: List[(ProjectId, Leistung)]
-  ): IO[Either[RepoError, Unit]] =
-    val seedOffers = seeds.flatMap(p => p.offers.map(o => (o.id.value, p.id.value)))
-    val steps = for
-      _ <- migrations.traverse_((version, statements) =>
-        EitherT(db.migration(MigrationLock, version, statements))
-      )
-      _ <- EitherT(
-        db.transact(
-          seedOffers.map((o, p) => Stmt(Sql.insertSeedOffer, (p, o))) ++
-            leistungen.zipWithIndex.map { case ((p, l), i) =>
-              // Seed Leistungen are inserted once; renames and deletions of them are kept.
-              Stmt(
-                Sql.insertSeedLeistung,
-                (p.value, l.id.value, l.category.value, l.name.value, i - 1000)
-              )
-            }
-        )
-      )
-    yield ()
-    steps.value
+  private def migrate(db: Postgres): IO[Either[RepoError, Unit]] =
+    migrations
+      .traverse_((version, statements) => EitherT(db.migration(MigrationLock, version, statements)))
+      .value
 
   /** Connects to the database and creates or migrates the schema. */
   def resource(
       config: DbConfig,
-      seeds: List[Project],
-      leistungen: List[(ProjectId, Leistung)] = Nil
+      projects: List[Project] = Nil
   ): Resource[IO, PostgresProjectRepository] =
     for
       db <- Postgres.resource(config)
       _ <- Resource.eval(
-        migrate(db, seeds, leistungen).flatMap(
+        migrate(db).flatMap(
           _.fold(
             e => IO.raiseError(IllegalStateException(s"Datenbank-Migration fehlgeschlagen: $e")),
             IO.pure
@@ -737,4 +716,4 @@ object PostgresProjectRepository:
         )
       )
       lock <- Resource.eval(Mutex[IO])
-    yield PostgresProjectRepository(db, lock, seeds.map(p => p.id -> p).toMap)
+    yield PostgresProjectRepository(db, lock, projects.map(p => p.id -> p).toMap)
