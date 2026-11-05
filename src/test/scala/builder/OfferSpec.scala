@@ -227,3 +227,46 @@ class OfferSpec extends AnyFunSuite with Matchers with EitherValues with ScalaCh
       )
       .isRight shouldBe true
   }
+
+  test("lineSumCheck is Consistent when every position has a total that sums to net") {
+    offer("a", Other, 90_000).lineSumCheck shouldBe LineSumCheck.Consistent
+  }
+
+  test("lineSumCheck is NotCheckable when a position has no price") {
+    val net = eur(5_000)
+    val vat = vat19.vatOn(net)
+    val incomplete = LineItem
+      .from(
+        Extracted.manual("ohne Preis"),
+        QuantityInfo.Missing,
+        None,
+        None,
+        None,
+        None,
+        PriceInfo.Missing,
+        PriceInfo.Missing
+      )
+      .value
+    val o = Offer
+      .from(
+        offerId("nc"),
+        Extracted.manual(Contractor("Firma")),
+        Extracted.manual(Dates.of(2026, 10, 1).value),
+        None,
+        Other.id,
+        List(lineItem("mit Preis", eur(3_000)), incomplete),
+        Extracted.manual(net),
+        Extracted.manual(vat19),
+        Extracted.manual(vat),
+        Extracted.manual(net.plus(vat).value),
+        Nil,
+        Nil
+      )
+      .value
+    o.lineSumCheck shouldBe LineSumCheck.NotCheckable(1)
+  }
+
+  test("a Pauschalangebot has Consistent lineSumCheck") {
+    offerArgs("pausch", Other, 480_000).copy(lineItems = Nil).build.value.lineSumCheck shouldBe
+      LineSumCheck.Consistent
+  }

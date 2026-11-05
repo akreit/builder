@@ -100,10 +100,10 @@ object Pages:
             lowConfidenceWarning(raw),
             OfferDetail.render(raw, cur)
           )
-        case UploadStatus.Accepted(raw, _) =>
+        case UploadStatus.Accepted(raw, offer) =>
           frag(
             heading,
-            p("Ausgelesen und geprüft: Positionen, Netto, MwSt. und Brutto stimmen überein."),
+            p(acceptanceMessage(offer)),
             lowConfidenceWarning(raw),
             tags2.details(attr("open") := "open")(
               tags2.summary("Ausgelesene Angebotsdaten mit Seitenangaben"),
@@ -111,6 +111,24 @@ object Pages:
             )
           )
     )
+
+  /** German status line for an accepted offer: net/VAT/gross always checked; position sum only when
+    * every position has a price.
+    */
+  private def acceptanceMessage(offer: Offer): String =
+    val amountsOk = "Netto, MwSt. und Brutto stimmen überein"
+    offer.lineSumCheck match
+      case LineSumCheck.Consistent =>
+        if offer.lineItems.isEmpty then s"Ausgelesen und geprüft: $amountsOk."
+        else s"Ausgelesen und geprüft: Positionen, $amountsOk."
+      case LineSumCheck.NotCheckable(n) =>
+        val pos =
+          if n == 1 then "bei 1 Position fehlt der Preis"
+          else s"bei $n Positionen fehlt der Preis"
+        s"Ausgelesen und geprüft: $amountsOk. Positionssumme nicht prüfbar: $pos."
+      case LineSumCheck.Mismatch(sum, net) =>
+        // Accepted offers cannot carry a mismatch (Offer.from rejects it); keep exhaustiveness.
+        s"Ausgelesen und geprüft: $amountsOk. Positionssumme ${Format.money(sum)} ≠ Netto ${Format.money(net)}."
 
   private def lowConfidenceWarning(raw: RawOffer): Frag =
     raw.lowConfidenceFields match

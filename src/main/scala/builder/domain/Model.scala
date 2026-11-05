@@ -130,6 +130,17 @@ object LineItem:
       LineItem(description, quantity, unit, sizes, manufacturer, model, unitPrice, total)
     )
 
+/** Result of comparing line-item totals to the offer net. */
+enum LineSumCheck:
+  /** Every position has a known total and those totals sum to net (or there are no positions). */
+  case Consistent
+
+  /** All totals are known but do not sum to net. */
+  case Mismatch(sum: Money, net: Money)
+
+  /** At least one position has no price/total, so the position sum cannot be checked. */
+  case NotCheckable(positionsWithoutPrice: Int)
+
 /** A contractor offer whose amounts are known to be consistent. Only [[Offer.from]] builds one.
   *
   * Sign rules: `net`, `vat` and `gross` must be non-negative. Individual line items MAY be
@@ -152,6 +163,29 @@ final case class Offer private (
     notes: List[String],
     exclusions: List[String]
 ):
+  /** Whether the positions' totals can be checked against net, and the outcome. */
+  def lineSumCheck: LineSumCheck =
+    lineItems match
+      case Nil              => LineSumCheck.Consistent
+      case items @ (_ :: _) =>
+        val withoutPrice = items.count(li =>
+          li.total match
+            case PriceInfo.Missing  => true
+            case PriceInfo.Known(_) => false
+        )
+        if withoutPrice > 0 then LineSumCheck.NotCheckable(withoutPrice)
+        else
+          val known = items.flatMap(li =>
+            li.total match
+              case PriceInfo.Known(e) => List(e.value)
+              case PriceInfo.Missing  => Nil
+          )
+          Money.sum(net.value.currency, known) match
+            case Left(_)    => LineSumCheck.NotCheckable(items.size)
+            case Right(sum) =>
+              if sum == net.value then LineSumCheck.Consistent
+              else LineSumCheck.Mismatch(sum, net.value)
+
   /** Every known amount on the offer, for currency checks (missing line prices omitted). */
   def amounts: List[Money] =
     List(net.value, vat.value, gross.value) ++

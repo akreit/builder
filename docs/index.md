@@ -19,9 +19,10 @@ An offer without line items (Pauschalangebot) is accepted. Line items may lack q
 (`QuantityInfo.Missing` / `PriceInfo.Missing`): the offer is still accepted, counted in totals /
 favorites / ranking via its extracted net and gross, and the missing fields are shown empty and
 flagged ("Menge fehlt" / "Preis fehlt") in the offer detail view. Positions without a price are
-excluded from per-Leistung sums in the comparison matrix. When every line item has a known total,
-those totals must sum to net; when quantity, unit price and total are all known, the total must be
-`unitPrice × quantity` rounded HALF_UP to cents.
+excluded from per-Leistung sums in the comparison matrix. `LineSumCheck` is `NotCheckable` then
+(UI: "Positionssumme nicht prüfbar"), never "Positionen … stimmen überein". When every line item
+has a known total, those totals must sum to net (`LineSumCheck.Consistent`); when quantity, unit
+price and total are all known, the total must be `unitPrice × quantity` rounded HALF_UP to cents.
 
 ```scala mdoc
 import builder.SampleData
