@@ -273,5 +273,14 @@ object LeistungenMatrix:
           attr("aria-label") := "Neue Leistung"
         ),
         button(tpe := "submit")("Leistung hinzufügen")
+      ),
+      // Manual category creation inside the comparison view (owner: group lines across categories).
+      editForm(project, List("aktion" -> "kategorie-neu"), auto = false)(
+        input(
+          name := "name",
+          placeholder := "Neue Kategorie",
+          attr("aria-label") := "Neue Kategorie im Vergleich"
+        ),
+        button(tpe := "submit")("Kategorie hinzufügen")
       )
     )
