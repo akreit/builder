@@ -6,6 +6,8 @@ Regeln:
 - Datumsangaben als ISO-Datum "JJJJ-MM-TT". "Gültig bis": wenn nur eine Bindefrist wie "4 Wochen" angegeben ist, value = "" und den Text in notes übernehmen.
 - page ist die 1-basierte Seitenzahl, auf der der Wert steht (bei Bildern 1); 0 wenn der Wert fehlt.
 - confidence: "high" wenn eindeutig lesbar und eindeutig zugeordnet; "medium" bei kleinen Unsicherheiten; "low" wenn schlecht lesbar, mehrdeutig, nur indirekt erschlossen oder wenn du den Wert doch berechnen musstest.
+- contractor: Firmenname des Anbieters (Briefkopf), unverändert wie im Dokument.
+- recipient: Adressat / Angebotsempfänger wie auf dem Angebot genannt (Name oder Nachname der angesprochenen Person bzw. des adressierten Haushalts). Nur Werte aus dem Dokument; nichts erfinden. Fehlt der Adressat, value = "". Nicht den Firmennamen hier wiederholen.
 - lineItems: jede bepreiste Position einzeln (auch Rabatte als negative Positionen). Alternativ- und Eventualpositionen ohne Einrechnung in die Summe NICHT als lineItem, sondern in notes.
 - unit z. B. "Stk", "m²", "m", "psch"; sizes z. B. "78 x 140 cm"; manufacturer und model nur wenn genannt.
 - notes: Hinweise, Zahlungsbedingungen, Bindefristen, Alternativen. exclusions: ausdrücklich nicht enthaltene Leistungen.

@@ -133,7 +133,7 @@ class MigrationSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
         .flatMap(config =>
           List(1, 2)
             .traverse_ { _ =>
-              val shell = Main.defaultProject.toOption.get
+              val shell = Main.defaultProject().toOption.get
               builder.repo.PostgresProjectRepository.resource(config, List(shell)).use { repo =>
                 val http = builder.http
                   .Api(
@@ -150,8 +150,14 @@ class MigrationSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
                     .traverse(count(dir, _))
                 yield
                   shell.offers shouldBe Nil
-                  shell.categories shouldBe Nil
-                  response.status shouldBe Status.Ok
+                  shell.categories.map(_.name.value) shouldBe DefaultProject.StructuralCategories
+                    .map(_._2)
+                  response.status shouldBe Status.SeeOther
+                  response.headers.headers.exists(h =>
+                    h.name.toString.equalsIgnoreCase("Location") &&
+                      h.value == "/projekte/default/kategorien/dach"
+                  ) shouldBe true
+                  // Structural categories are in-memory; DB stays empty until user edits/uploads.
                   rows shouldBe List.fill(5)(0)
               }
             }

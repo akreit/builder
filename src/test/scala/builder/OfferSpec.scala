@@ -178,6 +178,7 @@ class OfferSpec extends AnyFunSuite with Matchers with EitherValues with ScalaCh
       .from(
         offerId("missing-price"),
         Extracted.manual(Contractor("Firma")),
+        None,
         Extracted.manual(Dates.of(2026, 10, 1).value),
         None,
         Other.id,
@@ -214,6 +215,7 @@ class OfferSpec extends AnyFunSuite with Matchers with EitherValues with ScalaCh
       .from(
         offerId("partial"),
         Extracted.manual(Contractor("Firma")),
+        None,
         Extracted.manual(Dates.of(2026, 10, 1).value),
         None,
         Other.id,
@@ -251,6 +253,7 @@ class OfferSpec extends AnyFunSuite with Matchers with EitherValues with ScalaCh
       .from(
         offerId("nc"),
         Extracted.manual(Contractor("Firma")),
+        None,
         Extracted.manual(Dates.of(2026, 10, 1).value),
         None,
         Other.id,
@@ -321,6 +324,7 @@ class OfferSpec extends AnyFunSuite with Matchers with EitherValues with ScalaCh
           .from(
             offerId("gen"),
             Extracted.manual(Contractor("Firma")),
+            None,
             Extracted.manual(Dates.of(2026, 10, 1).value),
             None,
             Other.id,
@@ -346,6 +350,7 @@ class OfferSpec extends AnyFunSuite with Matchers with EitherValues with ScalaCh
           .from(
             offerId("silent"),
             Extracted.manual(Contractor("Firma")),
+            None,
             Extracted.manual(Dates.of(2026, 10, 1).value),
             None,
             Other.id,

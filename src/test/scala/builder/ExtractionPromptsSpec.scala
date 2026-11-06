@@ -24,7 +24,7 @@ class ExtractionPromptsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers
       prompts.offerExtraction should not be empty
       sha256(
         prompts.offerExtraction
-      ) shouldBe "e96a6df2f8c31cbb435c2e7b7dc0abe87592b223b464a8433f1942fc7815e527"
+      ) shouldBe "8604e57d27ee319f573cb9c6ddfb042b51bfb567ec1a640916606e495c98ac15"
       sha256(
         prompts.knownEmpty
       ) shouldBe "06294b3668af785f0644006446960a1ac142addbefbc14384b9b504c132d17bf"

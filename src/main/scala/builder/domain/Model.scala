@@ -149,6 +149,8 @@ enum LineSumCheck:
 final case class Offer private (
     id: OfferId,
     contractor: Extracted[Contractor],
+    /** Addressee as printed on the offer; absent when not extracted. Never invent a name. */
+    recipient: Option[Extracted[String]],
     date: Extracted[LocalDate],
     validUntil: Option[Extracted[LocalDate]],
     category: CategoryId,
@@ -214,6 +216,7 @@ object Offer:
   def from(
       id: OfferId,
       contractor: Extracted[Contractor],
+      recipient: Option[Extracted[String]],
       date: Extracted[LocalDate],
       validUntil: Option[Extracted[LocalDate]],
       category: CategoryId,
@@ -240,6 +243,7 @@ object Offer:
     yield Offer(
       id,
       contractor,
+      recipient,
       date,
       validUntil,
       category,

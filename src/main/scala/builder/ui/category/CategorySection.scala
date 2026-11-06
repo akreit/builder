@@ -37,7 +37,7 @@ object CategorySection:
           tbody(offers.map(o => offerRow(project, ct.category, o, uploads)))
         )
       ,
-      uploads.map(uploadBlock(_, project.currency)),
+      uploads.map(uploadBlock(_, project.currency, project, ct.category)),
       leistungenSection(view, ct.category),
       rankingSection(view, ct.category),
       uploadForm(project, ct.category)

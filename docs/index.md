@@ -36,4 +36,4 @@ cents.
 - `GET /projekte/{projectId}/kategorien/{categoryId}` page of one category (German HTML; unknown project or category: 404)
 - `POST /ui/projects/{id}/categories/{categoryId}/favorite/{offerId}` (htmx; returns the re-rendered fragment)
 
-Run with `sbt run` and try `curl localhost:8080/health`. A fresh database stays empty; `/` and unknown projects return 404.
+Run with `sbt run` and try `curl localhost:8080/health`. `/` opens the home project shell (structural categories, configurable name); unknown projects return 404. Uploaded offers and extractions live in Postgres + `BUILDER_DATA_DIR` and survive container restarts when Compose volumes are kept.

@@ -17,7 +17,7 @@ object CategoryPage:
       true,
       h1(active.fold(project.name)(_.name.value)),
       p(cls := "hinweis")(
-        s"Währung ${project.currency.code} · Beispieldaten (fiktive Firmen und Beträge) · hochgeladene Angebote werden gespeichert"
+        s"Währung ${project.currency.code} · hochgeladene Angebote werden gespeichert"
       ),
       projectFragment(view, active)
     )

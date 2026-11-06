@@ -100,8 +100,13 @@ object OfferDraft:
       d <- decimal("MwSt.-Satz", s.stripSuffix("%").trim)
       r <- domain("MwSt.-Satz", VatRate.from(d))
     yield extracted(raw.vatRate, r)
+    val recipient: Checked[Option[Extracted[String]]] =
+      raw.recipient match
+        case Some(f) => Right(f.text.map(extracted(f, _)))
+        case None    => Right(None)
     (
       required("Firma", raw.contractor).map(c => extracted(raw.contractor, Contractor(c))),
+      recipient,
       required("Angebotsdatum", raw.date)
         .flatMap(date("Angebotsdatum", _))
         .map(extracted(raw.date, _)),
@@ -111,12 +116,13 @@ object OfferDraft:
       vatRate,
       money("MwSt.", raw.vat, cur),
       money("Brutto", raw.gross, cur)
-    ).parTupled.flatMap((contractor, d, valid, items, net, rate, vat, gross) =>
+    ).parTupled.flatMap((contractor, recip, d, valid, items, net, rate, vat, gross) =>
       domain(
         "Angebot",
         Offer.from(
           id,
           contractor,
+          recip,
           d,
           valid,
           category,

@@ -60,8 +60,8 @@ enum UploadStatus:
 
 final case class UploadView(upload: Upload, status: UploadStatus)
 
-/** Outcome of [[ProjectRepository.addUpload]]: which offer id the row landed on, and which
-  * same-firm uploads in the category were removed in the same transaction.
+/** Outcome of [[ProjectRepository.addUpload]]: which offer id the row landed on, and which same
+  * firm+recipient uploads in the category were removed in the same transaction.
   */
 final case class UploadStored(keep: OfferId, obsolete: List[OfferId])
 
@@ -124,14 +124,28 @@ trait ProjectRepository:
       offer: OfferId
   ): IO[Either[RepoError, ProjectView]]
 
+  /** Deletes the uploaded offer `offer` of `category` in `id` (cascades uploads, favorites,
+    * assignments and coverage). After a successful transaction, `cleanup` runs still under the
+    * repository lock (same pattern as upload `finish`) so a concurrent upload cannot interleave
+    * with file removal. A hard kill mid-cleanup can still leave an orphan file — the lock does not
+    * survive process death. Returns the updated project view.
+    */
+  def deleteOffer(
+      id: ProjectId,
+      category: CategoryId,
+      offer: OfferId,
+      cleanup: IO[Unit]
+  ): IO[Either[RepoError, ProjectView]]
+
   /** Stores an uploaded offer of `id`; it is validated (and counted if valid) on every read. When
-    * the project already has an upload of the same firm in the same category, that row is replaced
-    * in place (same offer id) rather than creating a second offer. `Right` carries the offer id
-    * that was kept and the obsolete same-firm ids whose files the caller should delete — both
-    * decided under the repository lock from a fresh load, so the caller must not guess them
-    * beforehand. Under the lock, `prepare` first puts the file durably in place (returning how to
-    * undo it); only then is the transaction run. If it fails or is canceled the file step is rolled
-    * back, so DB and file never disagree, and a concurrent replace cannot interleave.
+    * the project already has an upload of the same firm and recipient in the same category, that
+    * row is replaced in place (same offer id) rather than creating a second offer. `Right` carries
+    * the offer id that was kept and the obsolete same-identity ids whose files the caller should
+    * delete — both decided under the repository lock from a fresh load, so the caller must not
+    * guess them beforehand. Under the lock, `prepare` first puts the file durably in place
+    * (returning how to undo it); only then is the transaction run. If it fails or is canceled the
+    * file step is rolled back, so DB and file never disagree, and a concurrent replace cannot
+    * interleave.
     */
   def addUpload(
       id: ProjectId,
@@ -332,6 +346,35 @@ final class PostgresProjectRepository private (
       }
     )
 
+  def deleteOffer(
+      id: ProjectId,
+      category: CategoryId,
+      offer: OfferId,
+      cleanup: IO[Unit]
+  ): IO[Either[RepoError, ProjectView]] =
+    lock.lock.surround(
+      load(id).flatMap {
+        case Left(e)  => IO.pure(Left(e))
+        case Right(v) =>
+          if !v.project.categories.exists(_.id == category) then
+            IO.pure(Left(RepoError.CategoryNotFound(category)))
+          else
+            v.uploads.find(_.upload.id == offer) match
+              case None => IO.pure(Left(RepoError.OfferNotFound(offer)))
+              case Some(u) if u.upload.category != category =>
+                IO.pure(Left(RepoError.OfferNotFound(offer)))
+              case Some(_) =>
+                db.transact(List(Stmt(Sql.deleteOffer, (id.value, offer.value)))).flatMap {
+                  case Left(e)  => IO.pure(Left(e))
+                  case Right(_) =>
+                    // File removal under the lock after commit (upload finish pattern). Errors are
+                    // swallowed like finish.attempt — DB row is already gone; a hard kill here can
+                    // still orphan the file.
+                    cleanup.attempt >> load(id)
+                }
+      }
+    )
+
   def addUpload(
       id: ProjectId,
       upload: Upload,
@@ -502,12 +545,6 @@ final class PostgresProjectRepository private (
             case UploadStatus.ExtractionFailed(_) => None
         )
         .toRight(RepoError.OfferNotFound(o))
-    def sameCategory(u: Upload, l: Leistung): Either[RepoError, Unit] =
-      Either.cond(
-        u.category == l.category,
-        (),
-        RepoError.Rejected("Leistung gehört zu einer anderen Kategorie")
-      )
     e match
       case Edit.AddCategory(name) =>
         CategoryId
@@ -584,13 +621,15 @@ final class PostgresProjectRepository private (
         )
       case Edit.AssignItem(o, item, target) =>
         for
-          (u, raw) <- upload(o)
+          (_, raw) <- upload(o)
           _ <- Either.cond(
             raw.lineItems.indices.contains(item),
             (),
             RepoError.ItemNotFound(o, item)
           )
-          _ <- target.traverse(l => leistung(l).flatMap(sameCategory(u, _)))
+          // Cross-category grouping is allowed: a line item of an offer uploaded under one
+          // category may be assigned to a Leistung of another (manual scope grouping).
+          _ <- target.traverse(leistung)
         yield List(Stmt(Sql.upsertManualItem, (p, o.value, item, target.map(_.value))))
       case Edit.RateContractor(c, rating) =>
         Right(rating match
@@ -602,32 +641,37 @@ final class PostgresProjectRepository private (
         )
       case Edit.SetCoverage(o, l, coverage) =>
         for
-          (u, _) <- upload(o)
-          _ <- leistung(l).flatMap(sameCategory(u, _))
+          _ <- upload(o)
+          _ <- leistung(l) // coverage may target a Leistung of another category (foreign column)
         yield coverage match
           case Some(c) =>
             List(Stmt(Sql.upsertManualCoverage, (p, o.value, l.value, Coverage.code(c))))
           case None => List(Stmt(Sql.deleteManualCoverage, (p, o.value, l.value)))
 
-/** Same firm in the same category: normalised contractor name via [[ContractorKey]]. */
+/** Same firm + same recipient in the same category: replace identity via [[OfferReplaceKey]].
+  * Missing recipients share [[RecipientKey.Unknown]] and only match other unknowns — they never
+  * overwrite a known recipient.
+  */
 object UploadReplace:
-  def keyOf(raw: RawOffer): Option[ContractorKey] =
-    raw.contractor.text.flatMap(ContractorKey.of)
+  def keyOf(raw: RawOffer): Option[OfferReplaceKey] =
+    raw.contractor.text
+      .flatMap(ContractorKey.of)
+      .map(firm => OfferReplaceKey(firm, RecipientKey.fromField(raw.recipient)))
 
-  def keyOf(outcome: UploadOutcome): Option[ContractorKey] = outcome match
+  def keyOf(outcome: UploadOutcome): Option[OfferReplaceKey] = outcome match
     case UploadOutcome.Read(raw) => keyOf(raw)
     case UploadOutcome.Failed(_) => None
 
-  def keyOf(status: UploadStatus): Option[ContractorKey] = status match
+  def keyOf(status: UploadStatus): Option[OfferReplaceKey] = status match
     case UploadStatus.Accepted(raw, _)    => keyOf(raw)
     case UploadStatus.Rejected(raw, _)    => keyOf(raw)
     case UploadStatus.ExtractionFailed(_) => None
 
-  /** Uploads of `category` whose firm matches `key`, in load order (oldest first). */
-  def sameFirm(
+  /** Uploads of `category` with the same replace key, in load order (oldest first). */
+  def sameIdentity(
       view: ProjectView,
       category: CategoryId,
-      key: Option[ContractorKey]
+      key: Option[OfferReplaceKey]
   ): List[Upload] =
     key.toList.flatMap(k =>
       view.uploads.collect {
@@ -635,23 +679,26 @@ object UploadReplace:
       }
     )
 
-  /** Offer id to keep: the oldest same-firm upload in the category, else the upload's own id. */
+  /** Offer id to keep: the oldest same-identity upload in the category, else the upload's own id.
+    */
   def kept(view: ProjectView, upload: Upload): OfferId =
-    sameFirm(view, upload.category, keyOf(upload.outcome)).headOption
+    sameIdentity(view, upload.category, keyOf(upload.outcome)).headOption
       .map(_.id)
       .getOrElse(upload.id)
 
-  /** Same-firm uploads in the category other than [[kept]], whose files and rows go away. */
+  /** Same-identity uploads in the category other than [[kept]], whose files and rows go away. */
   def obsolete(view: ProjectView, upload: Upload): List[Upload] =
     val keep = kept(view, upload)
-    sameFirm(view, upload.category, keyOf(upload.outcome)).filterNot(_.id == keep)
+    sameIdentity(view, upload.category, keyOf(upload.outcome)).filterNot(_.id == keep)
 
 object PostgresProjectRepository:
   /** Version of the [[RawOffer]] JSON written to `uploads.extraction`. Version 2 added the optional
     * Leistung fields, so version 1 still decodes; other versions are not readable.
     */
-  val ExtractionVersion: Int = 2
-  private val ReadableVersions: Set[Int] = Set(1, 2)
+  /** Version 3 adds optional `recipient` (Adressat); v1/v2 JSON still decodes (recipient absent).
+    */
+  val ExtractionVersion: Int = 3
+  private val ReadableVersions: Set[Int] = Set(1, 2, 3)
 
   /** Seed categories with stored renames and deletions applied, plus added categories. Stored
     * changes that would make the project invalid are ignored with a warning.

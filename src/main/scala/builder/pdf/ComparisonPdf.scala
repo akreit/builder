@@ -1,6 +1,7 @@
 package builder.pdf
 
 import builder.domain.*
+import builder.domain.OfferLabel
 import builder.extraction.RawLineItem
 import builder.repo.*
 import builder.ui.Format
@@ -19,6 +20,10 @@ import scala.util.Using
   * the category and offer headings; no content is truncated.
   */
 object ComparisonPdf:
+  private def offerHeading(col: MatrixColumn): String =
+    val label = OfferLabel.display(col.raw)
+    if label.nonEmpty then label else col.upload.upload.fileName
+
   private def coverage(c: Coverage): String = c match
     case Coverage.Enthalten      => "enthalten"
     case Coverage.NichtEnthalten => "NICHT ENTHALTEN"
@@ -78,7 +83,7 @@ object ComparisonPdf:
       m.columns
         .lift(i)
         .fold("?")(col =>
-          col.raw.contractor.text.getOrElse(col.upload.upload.fileName) + (col.upload.status match
+          offerHeading(col) + (col.upload.status match
             case UploadStatus.Accepted(_, _)      => " (validiert)"
             case UploadStatus.Rejected(_, _)      => " (NICHT VALIDIERT – prüfen)"
             case UploadStatus.ExtractionFailed(_) => " (nicht lesbar)")
@@ -111,7 +116,7 @@ object ComparisonPdf:
           val headings = "Leistung / Umfang" :: indexes.flatMap(i =>
             m.columns
               .lift(i)
-              .map(col => col.raw.contractor.text.getOrElse(col.upload.upload.fileName))
+              .map(col => offerHeading(col))
           )
           val width = 780f / headings.size
           val textWidth = width - 12

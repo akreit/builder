@@ -12,12 +12,32 @@ import scalatags.Text.tags2
 
 /** Uploaded offers (extraction results) and the upload form. */
 object Uploads:
-  private[ui] def uploadBlock(u: UploadView, cur: Currency): Frag =
+  private[ui] def deleteUrl(project: Project, category: Category, offerId: OfferId): String =
+    s"/ui/projects/${project.id.value}/categories/${category.id.value}/angebote/${offerId.value}/loeschen"
+
+  private[ui] def deleteButton(project: Project, category: Category, upload: Upload): Frag =
+    button(
+      hxPost := deleteUrl(project, category, upload.id),
+      hxTarget := "#projekt",
+      hxSwap := "outerHTML",
+      hxConfirm := s"Hochgeladenes Angebot „${upload.fileName}“ wirklich löschen?"
+    )("Löschen")
+
+  private[ui] def uploadBlock(
+      u: UploadView,
+      cur: Currency,
+      project: Project,
+      category: Category
+  ): Frag =
     val heading = h3(s"Hochgeladen: ${u.upload.fileName}")
     div(cls := "upload", attr("data-upload") := u.upload.id.value)(
       u.status match
         case UploadStatus.ExtractionFailed(m) =>
-          frag(heading, p(cls := "abweichung")(s"Auslesen fehlgeschlagen: $m"))
+          frag(
+            heading,
+            p(cls := "abweichung")(s"Auslesen fehlgeschlagen: $m"),
+            deleteButton(project, category, u.upload)
+          )
         case UploadStatus.Rejected(raw, issues) =>
           frag(
             heading,
@@ -26,14 +46,15 @@ object Uploads:
               ul(issues.toList.map(i => li(describe(i))))
             ),
             lowConfidenceWarning(raw),
-            OfferDetail.render(raw, cur)
+            OfferDetail.render(raw, cur),
+            deleteButton(project, category, u.upload)
           )
         case UploadStatus.Accepted(raw, offer) =>
           frag(
             heading,
             p(acceptanceMessage(offer)),
             lowConfidenceWarning(raw),
-            tags2.details(attr("open") := "open")(
+            tags2.details(
               tags2.summary("Ausgelesene Angebotsdaten mit Seitenangaben"),
               OfferDetail.render(raw, cur)
             )
@@ -58,8 +79,10 @@ object Uploads:
     raw.lowConfidenceFields match
       case Nil    => frag()
       case fields =>
-        div(cls := "warnung")(
-          strong(s"⚠ ${fields.size} Felder mit geringer Sicherheit – bitte im Original prüfen:"),
+        tags2.details(cls := "warnung unsichere-felder", attr("open") := "open")(
+          tags2.summary(
+            s"⚠ ${fields.size} Felder mit geringer Sicherheit – bitte im Original prüfen"
+          ),
           ul(fields.map(li(_)))
         )
   private[ui] def uploadForm(project: Project, category: Category): Frag =

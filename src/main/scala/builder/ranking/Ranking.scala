@@ -1,6 +1,7 @@
 package builder.ranking
 
 import builder.domain.*
+import builder.domain.OfferLabel
 import builder.repo.*
 
 import scala.math.BigDecimal.RoundingMode
@@ -48,7 +49,9 @@ object Ranking:
   private def sum(ms: List[Money], cur: Currency): Option[Money] = Money.sum(cur, ms).toOption
 
   /** Display name: the recognised contractor, else the file name. */
-  def contractor(c: MatrixColumn): String = firmName(c).getOrElse(c.upload.upload.fileName)
+  def contractor(c: MatrixColumn): String =
+    val label = OfferLabel.display(c.raw)
+    if label.nonEmpty then label else c.upload.upload.fileName
 
   /** The contractor as read from the offer; ratings are only ever keyed by this, never by file. */
   def firmName(c: MatrixColumn): Option[String] =

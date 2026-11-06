@@ -118,7 +118,7 @@ class LeistungenReviewSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers 
   private def mismatches(html: String): List[String] =
     """data-abweichung="(true|false)"""".r.findAllMatchIn(html).map(_.group(1)).toList
 
-  "Leistungen of another category are never assigned, neither by the extractor nor by hand" in {
+  "extractor still leaves other-category refs unmapped; manual cross-category assign groups them" in {
     val extractor = SwitchingExtractor(gauben)
     TestApp.fresh(extractor).use { app =>
       for
@@ -133,6 +133,11 @@ class LeistungenReviewSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers 
         )
         (_, html) <- upload(app, "fenster")
         offer = offerIn(html, "fenster")
+        // Extraction must not auto-map across categories — positions stay unassigned.
+        _ = blech should not be empty
+        _ = html should include("Pos. 1: Dachfenster liefern")
+        _ = html should include("Pos. 2: Einbau inkl. Eindeckrahmen")
+        // Manual grouping onto a Leistung of another category succeeds.
         (assignStatus, assign) <- edit(
           app,
           "aktion" -> "position-zuordnen",
@@ -147,14 +152,27 @@ class LeistungenReviewSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers 
           "leistung" -> blech,
           "status" -> "enthalten"
         )
+        (_, dachPage) <- run(
+          app,
+          Request[IO](Method.GET, Uri.unsafeFromString("/projekte/demo/kategorien/dach"))
+        )
       yield
-        blech should not be empty
-        html should include("Pos. 1: Dachfenster liefern")
-        html should include("Pos. 2: Einbau inkl. Eindeckrahmen")
-        assignStatus shouldBe Status.Conflict
-        assign should include("anderen Kategorie")
-        coverageStatus shouldBe Status.Conflict
-        coverage should include("anderen Kategorie")
+        assignStatus shouldBe Status.Ok
+        assign should not include "anderen Kategorie"
+        // Ziel select offers Leistungen of every category (optgroup labels).
+        assign should include("""label="Dach"""")
+        assign should include("""label="Fenster"""")
+        coverageStatus shouldBe Status.Ok
+        coverage should not include "anderen Kategorie"
+        // Grouped item appears under the target category's matrix (foreign column).
+        dachPage should include(blech)
+        dachPage should include(offer)
+        dachPage should include("""data-status="enthalten"""")
+        // Aggregate Leistungsverzeichnis lists categories, not individual line items.
+        assign should include("Leistungsverzeichnis")
+        assign should include("""data-verzeichnis-kategorie="dach"""")
+        assign should include("""data-verzeichnis-kategorie="fenster"""")
+        assign should include("""id="leistungsverzeichnis"""")
     }
   }
 

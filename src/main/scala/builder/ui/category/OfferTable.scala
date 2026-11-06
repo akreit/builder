@@ -1,15 +1,20 @@
 package builder.ui.category
 
 import builder.domain.*
+import builder.domain.OfferLabel
 import builder.repo.*
 import builder.ui.Format
 import builder.ui.common.Htmx.*
 import scalatags.Text.all.*
 
-/** Offer rows of a category, with the favorite button. */
+/** Offer rows of a category, with favorite and delete actions. */
 object OfferTable:
   private[ui] def favoriteUrl(project: Project, category: Category, offer: Offer): String =
     s"/ui/projects/${project.id.value}/categories/${category.id.value}/favorite/${offer.id.value}"
+
+  private[ui] def deleteUrl(project: Project, category: Category, offerId: OfferId): String =
+    s"/ui/projects/${project.id.value}/categories/${category.id.value}/angebote/${offerId.value}/loeschen"
+
   private[ui] def offerRow(
       project: Project,
       category: Category,
@@ -23,7 +28,8 @@ object OfferTable:
     }
     tr(if isFavorite then cls := "favorit" else ())(
       td(
-        offer.contractor.value.name,
+        OfferLabel.display(offer),
+        offer.recipient.fold(span(cls := "flag mittel")("Adressat unbekannt"))(_ => frag()),
         unsure.map(fs =>
           if fs.isEmpty then span(cls := "flag mittel")("aus Upload")
           else span(cls := "flag niedrig")(s"⚠ ${fs.size} unsichere Felder")
@@ -40,5 +46,13 @@ object OfferTable:
             hxTarget := "#projekt",
             hxSwap := "outerHTML"
           )("Als Favorit markieren")
+        ,
+        " ",
+        button(
+          hxPost := deleteUrl(project, category, offer.id),
+          hxTarget := "#projekt",
+          hxSwap := "outerHTML",
+          hxConfirm := s"Angebot „${OfferLabel.display(offer)}“ wirklich löschen?"
+        )("Löschen")
       )
     )

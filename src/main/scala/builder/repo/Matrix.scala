@@ -128,16 +128,24 @@ object Matrix:
 
   def build(view: ProjectView, category: CategoryId): Matrix =
     val currency = view.project.currency
-    val columns = view.uploads
-      .filter(_.upload.category == category)
-      .flatMap(u => raw(u).map(MatrixColumn(u, _)))
     val leistungen = view.leistungen.filter(_.category == category)
+    val known = leistungen.map(_.id).toSet
     val assigned = effective(view.assignments)
     val coverage = effectiveCoverage(view.coverage)
     def itemsOf(col: MatrixColumn): List[(Int, Option[LeistungId])] =
       col.raw.lineItems.indices.toList.map(i =>
         i -> assigned.get((col.upload.upload.id, i)).flatten
       )
+    val nativeColumns = view.uploads
+      .filter(_.upload.category == category)
+      .flatMap(u => raw(u).map(MatrixColumn(u, _)))
+    val nativeIds = nativeColumns.map(_.upload.upload.id).toSet
+    // Offers uploaded elsewhere that contribute at least one item to this category's Leistungen.
+    val foreignColumns = view.uploads
+      .filterNot(u => nativeIds.contains(u.upload.id))
+      .flatMap(u => raw(u).map(MatrixColumn(u, _)))
+      .filter(col => itemsOf(col).exists { case (_, l) => l.exists(known.contains) })
+    val columns = nativeColumns ++ foreignColumns
     val rows = leistungen.map(l =>
       MatrixRow(
         l,
@@ -149,29 +157,40 @@ object Matrix:
         }
       )
     )
-    val known = leistungen.map(_.id).toSet
-    val unassigned = columns.flatMap(col =>
-      itemsOf(col).collect {
-        case (i, l) if l.forall(id => !known.contains(id)) =>
-          Unassigned(
-            col.upload.upload.id,
-            i,
-            col.raw.lineItems.lift(i).flatMap(_.description.value).getOrElse(s"Position ${i + 1}")
-          )
+    // Only native offers list unassigned positions. Items manually moved to another category's
+    // Leistung are gone from this list (they appear under that category's matrix instead).
+    val unassigned = nativeColumns.flatMap(col =>
+      itemsOf(col).collect { case (i, None) =>
+        Unassigned(
+          col.upload.upload.id,
+          i,
+          col.raw.lineItems.lift(i).flatMap(_.description.value).getOrElse(s"Position ${i + 1}")
+        )
       }
     )
     def total(prices: List[Option[Money]]): Option[Money] =
       if prices.exists(_.isEmpty) then None else Money.sum(currency, prices.flatten).toOption
     val totals = columns.zipWithIndex.map { (col, j) =>
-      ColumnTotal(
-        total(rows.flatMap(_.cells.lift(j)).filter(_.items.nonEmpty).map(_.price)),
-        total(
-          unassigned
-            .filter(_.offer == col.upload.upload.id)
-            .map(u => col.raw.lineItems.lift(u.item).flatMap(li => amount(li.total, currency)))
-        ),
-        amount(col.raw.net, currency)
-      )
+      val native = col.upload.upload.category == category
+      val cellSum = total(rows.flatMap(_.cells.lift(j)).filter(_.items.nonEmpty).map(_.price))
+      if native then
+        // Prices of items assigned to another category still count toward the check-sum so the
+        // column does not spuriously flag a net mismatch after cross-category grouping.
+        val exported = itemsOf(col).collect {
+          case (i, Some(id)) if !known.contains(id) =>
+            col.raw.lineItems.lift(i).flatMap(li => amount(li.total, currency))
+        }
+        val localUnassigned = unassigned
+          .filter(_.offer == col.upload.upload.id)
+          .map(u => col.raw.lineItems.lift(u.item).flatMap(li => amount(li.total, currency)))
+        ColumnTotal(
+          cellSum,
+          total(localUnassigned ++ exported),
+          amount(col.raw.net, currency)
+        )
+      else
+        // Foreign column: only this category's cells matter; full-offer net is not comparable.
+        ColumnTotal(cellSum, Some(Money.zero(currency)), None)
     }
     Matrix(
       category,

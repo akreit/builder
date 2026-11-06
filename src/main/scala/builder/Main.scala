@@ -17,8 +17,9 @@ import java.nio.file.Path
 import scala.concurrent.duration.*
 
 /** Configuration from the environment: `PORT`, `HOST`, `BUILDER_DATA_DIR` (uploaded files, default
-  * `./data`), the Postgres connection (`DATABASE_URL` or `DATABASE_HOST`, `DATABASE_PORT`,
-  * `DATABASE_USER`, `DATABASE_PASSWORD`, `DATABASE_NAME`), `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`.
+  * `./data`), `BUILDER_PROJECT_NAME` (home project display name), the Postgres connection
+  * (`DATABASE_URL` or `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USER`, `DATABASE_PASSWORD`,
+  * `DATABASE_NAME`), `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`.
   */
 object Main extends IOApp.Simple:
   private val port: Port =
@@ -32,23 +33,19 @@ object Main extends IOApp.Simple:
   private val model: String =
     sys.env.lift("ANTHROPIC_MODEL").filter(_.nonEmpty).getOrElse(ClaudeOfferExtractor.DefaultModel)
 
-  /** The empty default project shell (`id=default`): no categories, Leistungen, offers or
-    * favorites.
+  /** The home project shell (`id=default`): structural categories, no offers or favorites. Name
+    * comes from [[DefaultProject.NameEnv]].
     */
-  private[builder] val defaultProject: Either[builder.domain.DomainError, builder.domain.Project] =
-    builder.domain.ProjectId
-      .from("default")
-      .flatMap(id =>
-        builder.domain.Project
-          .from(id, "Mein Projekt", builder.domain.Currency.EUR, Nil, Nil, Nil, Map.empty)
-      )
+  private[builder] def defaultProject(
+      env: Map[String, String] = sys.env
+  ): Either[builder.domain.DomainError, builder.domain.Project] =
+    DefaultProject.shell(env)
 
   def run: IO[Unit] =
     val app = for
-      // Empty in-memory shell so `/` has a project to open; no offers, categories or DB rows.
       shell <- cats.effect.Resource.eval(
         IO.fromEither(
-          defaultProject.left.map(e => IllegalStateException(s"Invalid home project: $e"))
+          defaultProject().left.map(e => IllegalStateException(s"Invalid home project: $e"))
         )
       )
       home = shell.id
