@@ -54,7 +54,7 @@ class UploadFileStepSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers wi
       TestDb
         .config(dir)
         .toResource
-        .flatMap(PostgresProjectRepository.resource(_, List(sample), SampleData.leistungen.value))
+        .flatMap(PostgresProjectRepository.resource(_, List(sample)))
         .use { repo =>
           val files = FileStore(dir.resolve("angebote"))
           files
