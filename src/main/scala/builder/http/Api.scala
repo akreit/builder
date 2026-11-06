@@ -519,40 +519,49 @@ final class Api(
             newOfferId.flatMap {
               case Left(e) =>
                 IO.pure(Left(fragmentError(StatusCode.InternalServerError, Pages.describe(e))))
-              case Right(id) =>
+              case Right(freshId) =>
                 val name = fileName.getOrElse(s"angebot.${fileType.extension}")
-                val upload = files.save(id, fileType, bytes) >>
-                  extractor
-                    .extract(bytes, fileType, known)
-                    .flatMap(extracted =>
-                      Clock[IO].realTimeInstant.map(now =>
-                        Upload(
-                          id,
-                          c,
-                          name,
-                          fileType,
-                          now,
-                          extracted.fold(
-                            e => UploadOutcome.Failed(Pages.describe(e)),
-                            UploadOutcome.Read(_)
-                          )
-                        )
+                // Read first (cancel mid-read leaves no file). Keep/obsolete are decided only
+                // inside addUpload's lock; the file is staged anonymously, then installed on the
+                // kept id under the lock before the txn (prepare), and rolled back if it fails.
+                val read = extractor
+                  .extract(bytes, fileType, known)
+                  .flatMap(extracted =>
+                    Clock[IO].realTimeInstant.map { now =>
+                      val outcome = extracted.fold(
+                        e => UploadOutcome.Failed(Pages.describe(e)),
+                        UploadOutcome.Read(_)
                       )
-                    )
-                // Saving and reading may be cancelled (then the file goes); once read, the row
-                // is written without interruption and the file is deleted only if that failed.
-                IO.uncancelable(poll =>
-                  poll(upload)
-                    .guaranteeCase {
-                      case Outcome.Succeeded(_)                    => IO.unit
-                      case Outcome.Errored(_) | Outcome.Canceled() => files.delete(id, fileType)
+                      Upload(freshId, c, name, fileType, now, outcome)
                     }
-                    .flatMap(u =>
-                      repo
-                        .addUpload(p, u)
-                        .onError(_ => files.delete(id, fileType))
-                        .flatTap(_.fold(_ => files.delete(id, fileType), _ => IO.unit))
-                    )
+                  )
+                IO.uncancelable(poll =>
+                  poll(read).flatMap { draft =>
+                    poll(files.stage(bytes)).flatMap { staged =>
+                      // The file is moved into place (old one kept as backup) under addUpload's
+                      // lock before the txn; a failed/canceled txn restores the old file.
+                      val prepare: UploadStored => IO[FileStep] = {
+                        case UploadStored(keep, obsolete) =>
+                          files
+                            .install(staged, keep, fileType)
+                            .map(installed =>
+                              FileStep(
+                                files.rollback(installed),
+                                files.finish(installed) >> obsolete.traverse_(files.deleteAll)
+                              )
+                            )
+                      }
+                      val stored = poll(repo.addUpload(p, draft, prepare)).flatMap {
+                        case Left(e) =>
+                          files.discard(staged).as(Left(e): Either[RepoError, Unit])
+                        case Right(_) => IO.pure(Right(()): Either[RepoError, Unit])
+                      }
+                      stored.guaranteeCase {
+                        case Outcome.Succeeded(_)                    => IO.unit
+                        case Outcome.Errored(_) | Outcome.Canceled() => files.discard(staged)
+                      }
+                    }
+                  }
                 ).flatMap {
                   case Left(e)   => IO.pure(Left(repoError(e)))
                   case Right(()) =>

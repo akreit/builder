@@ -2,7 +2,9 @@ package builder
 
 import builder.RawOffers.CountingExtractor
 import builder.extraction.*
+import cats.effect.Deferred
 import cats.effect.IO
+import cats.effect.Ref
 import cats.effect.testing.scalatest.AsyncIOSpec
 import cats.syntax.all.*
 import fs2.Stream
@@ -158,6 +160,227 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
     )
   }
 
+  "uploading the same firm again in the same category overwrites the existing offer" in {
+    val updated = dachfenster.copy(
+      net = f("6000.00", 3),
+      vat = f("1140.00", 3),
+      gross = f("7140.00", 3),
+      lineItems = List(item("Dachfenster liefern", "3", "Stk", "2000.00", "6000.00"))
+    )
+    TestApp.fresh(RecordingExtractor(List(dachfenster, updated))).use { app =>
+      for
+        (st1, body1) <- upload(app, pdf, "alt.pdf")
+        id1 <- IO.pure {
+          val m = """data-upload="([^"]+)"""".r.findFirstMatchIn(body1).map(_.group(1))
+          m.getOrElse("")
+        }
+        (st2, body2) <- upload(app, pdf, "neu.pdf")
+        after <- net(app)
+        files <- storedFiles(app)
+      yield
+        st1 shouldBe Status.Ok
+        st2 shouldBe Status.Ok
+        body1 should include("Zimmerei Erfunden GmbH")
+        body2 should include("Zimmerei Erfunden GmbH")
+        body2 should include("neu.pdf")
+        body2 should include("6.000,00")
+        // Still a single upload of that firm; the old file name is gone.
+        body2 should not include ("alt.pdf")
+        """data-upload="""".r.findAllIn(body2).size shouldBe 1
+        body2 should include(s"""data-upload="$id1"""")
+        // Only offer in Fenster: counts the new net.
+        after shouldBe "27118.50"
+        files.count(_.endsWith(".pdf")) shouldBe 1
+    }
+  }
+
+  "the same firm in a different category creates a new offer" in {
+    def page(app: TestApp, category: String): IO[String] =
+      app.http
+        .run(Request[IO](Method.GET, Uri.unsafeFromString(s"/projekte/demo/kategorien/$category")))
+        .flatMap(_.bodyText.compile.string)
+    TestApp.fresh(FakeExtractor(Right(dachfenster))).use { app =>
+      for
+        (st1, body1) <- upload(app, pdf, category = "fenster")
+        (st2, body2) <- upload(app, pdf, category = "dach")
+        fensterPage <- page(app, "fenster")
+        dachPage <- page(app, "dach")
+        fensterIds = """data-upload="([^"]+)"""".r.findAllMatchIn(fensterPage).map(_.group(1)).toSet
+        dachIds = """data-upload="([^"]+)"""".r.findAllMatchIn(dachPage).map(_.group(1)).toSet
+      yield
+        st1 shouldBe Status.Ok
+        st2 shouldBe Status.Ok
+        body1 should include("Zimmerei Erfunden GmbH")
+        body2 should include("Zimmerei Erfunden GmbH")
+        fensterIds.size shouldBe 1
+        dachIds.size shouldBe 1
+        fensterIds.intersect(dachIds) shouldBe empty
+    }
+  }
+
+  "a different firm in the same category creates a new offer" in {
+    val other = dachfenster.copy(contractor = f("Dachbau Phantasie OHG"))
+    TestApp.fresh(RecordingExtractor(List(dachfenster, other))).use { app =>
+      for
+        (_, body1) <- upload(app, pdf)
+        (_, body2) <- upload(app, pdf)
+      yield
+        body2 should include("Zimmerei Erfunden GmbH")
+        body2 should include("Dachbau Phantasie OHG")
+        """data-upload="""".r.findAllIn(body2).size shouldBe 2
+        body1 should include("Zimmerei Erfunden GmbH")
+    }
+  }
+
+  "same firm ignoring case and spaces overwrites; favorite keeps the offer id" in {
+    val sameFirm = dachfenster.copy(
+      contractor = f("  zimmerei   ERFUNDEN gmbh "),
+      net = f("5500.00", 3),
+      vat = f("1045.00", 3),
+      gross = f("6545.00", 3),
+      lineItems = List(item("Dachfenster liefern", "2", "Stk", "2750.00", "5500.00"))
+    )
+    def favorite(app: TestApp, offer: String) = app.http.run(
+      Request[IO](
+        Method.POST,
+        Uri.unsafeFromString(s"/ui/projects/demo/categories/fenster/favorite/$offer")
+      ).putHeaders("HX-Request" -> "true")
+    )
+    TestApp.fresh(RecordingExtractor(List(dachfenster, sameFirm))).use { app =>
+      for
+        (_, body1) <- upload(app, pdf)
+        offerId <- IO.pure(
+          """data-upload="([^"]+)"""".r.findFirstMatchIn(body1).map(_.group(1)).getOrElse("")
+        )
+        _ <- favorite(app, offerId)
+        (_, body2) <- upload(app, pdf, "ersetzt.pdf")
+        after <- net(app)
+      yield
+        body2 should include(s"""data-upload="$offerId"""")
+        """data-upload="""".r.findAllIn(body2).size shouldBe 1
+        body2 should include("Favorit")
+        body2 should include("ersetzt.pdf")
+        after shouldBe "26618.50"
+    }
+  }
+
+  "manual coverage and item assignment survive a same-firm overwrite" in {
+    val updated = dachfensterMitLeistungen.copy(
+      net = f("6000.00", 3),
+      vat = f("1140.00", 3),
+      gross = f("7140.00", 3),
+      lineItems = List(
+        dachfensterMitLeistungen.lineItems(0).copy(leistung = Some("fenster-fenster")),
+        dachfensterMitLeistungen.lineItems(1).copy(leistung = Some("fenster-einbau"))
+      ),
+      neueLeistungen = None,
+      abdeckung = dachfensterMitLeistungen.abdeckung.map(
+        _.map(a =>
+          if a.leistung == "fenster-entsorgung" then a.copy(status = "nicht_enthalten")
+          else if a.leistung == "fenster-einbau" then a.copy(status = "enthalten")
+          else a
+        )
+      )
+    )
+    TestApp
+      .fresh(RecordingExtractor(List(dachfensterMitLeistungen, updated)))
+      .use { app =>
+        for
+          (_, body1) <- upload(app, pdf, "alt.pdf")
+          offer = uploadId(body1)
+          _ <- edit(
+            app,
+            "aktion" -> "status-setzen",
+            "angebot" -> offer,
+            "leistung" -> "fenster-entsorgung",
+            "status" -> "enthalten"
+          )
+          _ <- edit(
+            app,
+            "aktion" -> "position-zuordnen",
+            "angebot" -> offer,
+            "position" -> "1",
+            "ziel" -> ""
+          )
+          (_, body2) <- upload(app, pdf, "neu.pdf")
+          afterId = uploadId(body2)
+        yield
+          afterId shouldBe offer
+          """data-upload="""".r.findAllIn(body2).size shouldBe 1
+          body2 should include("neu.pdf")
+          coverageStatus(body2, "fenster-entsorgung", offer) shouldBe Some("enthalten")
+          body2 should include("manuell")
+          body2 should include("Nicht zugeordnet")
+          body2 should include("Pos. 1: Dachfenster liefern")
+          // Overwrite did apply: second line item now counts under Einbau.
+          body2 should include("6.000,00")
+      }
+  }
+
+  "two concurrent same-firm uploads keep one offer id and a file matching the DB row" in {
+    val pdfA = "%PDF-1.7\nAAA-same-firm".getBytes("UTF-8")
+    val pdfB = "%PDF-1.7\nBBB-same-firm".getBytes("UTF-8")
+    for
+      ready <- Ref[IO].of(0)
+      go <- Deferred[IO, Unit]
+      extractor = new OfferExtractor[IO]:
+        def extract(
+            file: Array[Byte],
+            fileType: OfferFileType,
+            known: List[builder.domain.Leistung]
+        ) =
+          ready.modify(n => (n + 1, n + 1)).flatMap { n =>
+            val open = if n >= 2 then go.complete(()).void else IO.unit
+            open >> go.get.as(Right(dachfenster): Either[ExtractionError, RawOffer])
+          }
+      result <- TestApp.fresh(extractor).use { app =>
+        (upload(app, pdfA, "a.pdf"), upload(app, pdfB, "b.pdf")).parTupled.flatMap {
+          case ((st1, body1), (st2, body2)) =>
+            for
+              files <- storedFiles(app)
+              pdfs = files.filter(_.endsWith(".pdf"))
+              bytes <- pdfs.traverse(p => IO.blocking(Files.readAllBytes(java.nio.file.Path.of(p))))
+              ids =
+                ("""data-upload="([^"]+)"""".r.findAllMatchIn(body1 ++ body2).map(_.group(1)).toSet)
+              finalPage <- page(app)
+            yield (st1, st2, ids, pdfs.size, bytes, finalPage)
+        }
+      }
+    yield
+      val (st1, st2, ids, pdfCount, contents, finalPage) = result
+      st1 shouldBe Status.Ok
+      st2 shouldBe Status.Ok
+      ids.size shouldBe 1
+      pdfCount shouldBe 1
+      contents.size shouldBe 1
+      val kept = contents.head
+      (kept.sameElements(pdfA) || kept.sameElements(pdfB)) shouldBe true
+      // DB <-> file consistency: the file name recorded in the DB must belong to the stored bytes.
+      val dbName = if finalPage.contains("b.pdf") then "b.pdf" else "a.pdf"
+      (finalPage.contains("a.pdf") && finalPage.contains("b.pdf")) shouldBe false
+      val expected = if dbName == "a.pdf" then pdfA else pdfB
+      kept.sameElements(expected) shouldBe true
+  }
+
+  private def edit(app: TestApp, fields: (String, String)*): IO[(Status, String)] =
+    app.http
+      .run(
+        Request[IO](Method.POST, Uri.unsafeFromString("/ui/projects/demo/aenderungen"))
+          .withEntity(UrlForm((("ansicht" -> "fenster") +: fields)*))
+          .putHeaders("HX-Request" -> "true")
+      )
+      .flatMap(r => r.bodyText.compile.string.map(r.status -> _))
+
+  private def coverageStatus(html: String, leistung: String, offer: String): Option[String] =
+    s"""data-zelle="${java.util.regex.Pattern.quote(
+        s"$leistung|$offer"
+      )}" data-status="([a-z_]+)"""".r
+      .findFirstMatchIn(html)
+      .map(_.group(1))
+
+  private def uploadId(body: String): String =
+    """data-upload="([^"]+)"""".r.findFirstMatchIn(body).fold("")(_.group(1))
+
   private def storedFiles(app: TestApp): IO[List[String]] =
     IO.blocking {
       val dir = app.dir.resolve("angebote")
@@ -266,10 +489,11 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
   }
 
   "a restart applies no migration twice and keeps all rows" in {
+    val other = dachfenster.copy(contractor = f("Andere Fensterbau KG"))
     TestApp.tempDir.use(dir =>
       for
         _ <- TestApp.resource(dir, FakeExtractor(Right(dachfenster))).use(app => upload(app, pdf))
-        _ <- TestApp.resource(dir, FakeExtractor(Right(dachfenster))).use(app => upload(app, pdf))
+        _ <- TestApp.resource(dir, FakeExtractor(Right(other))).use(app => upload(app, pdf))
         versions <- TestDb.ints(dir, "SELECT version FROM schema_migrations ORDER BY version")
         uploads <- uploadRows(dir)
       yield
@@ -339,7 +563,8 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
           yield (savedWhileReading.size, files, rows)
         }
       )
-    yield result shouldBe (1, Nil, 0)
+    // Reading runs before the file is stored, so a cancel mid-read never leaves a file.
+    yield result shouldBe (0, Nil, 0)
   }
 
   "when the row cannot be inserted, the saved file is deleted" in {
