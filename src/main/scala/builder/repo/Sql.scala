@@ -60,10 +60,6 @@ private[repo] object Sql:
   val insertOffer: Command[(String, String)] =
     sql"INSERT INTO offers(project_id, id) VALUES ($text, $text)".command
 
-  /** (project, offer); for seed offers, which exist after the first start. */
-  val insertSeedOffer: Command[(String, String)] =
-    sql"INSERT INTO offers(project_id, id) VALUES ($text, $text) ON CONFLICT DO NOTHING".command
-
   /** (project, id, category, file name, file type, created, extraction, version, failure) */
   val insertUpload: Command[
     (
@@ -90,11 +86,6 @@ private[repo] object Sql:
             (SELECT COALESCE(MAX(position), 0) + 1 FROM leistungen WHERE project_id = $text),
             false)""".command
       .contramap((p, i, c, n) => (p, i, c, n, p))
-
-  /** (project, id, category, name, position); seed Leistungen keep later renames and deletions. */
-  val insertSeedLeistung: Command[(String, String, String, String, Int)] =
-    sql"""INSERT INTO leistungen(project_id, id, category_id, name, position, deleted)
-          VALUES ($text, $text, $text, $text, $int4, false) ON CONFLICT DO NOTHING""".command
 
   /** (project, offer, item, Leistung) as read by the extractor. */
   val insertReadItem: Command[(String, String, Int, Option[String])] =

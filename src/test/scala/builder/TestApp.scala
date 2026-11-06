@@ -22,7 +22,20 @@ object TestApp extends EitherValues:
   def resource(dir: Path, extractor: OfferExtractor[IO]): Resource[IO, TestApp] =
     Resource
       .eval(TestDb.config(dir))
-      .flatMap(PostgresProjectRepository.resource(_, List(sample), SampleData.leistungen.value))
+      .flatMap(PostgresProjectRepository.resource(_, List(sample)))
+      .evalTap(_ =>
+        TestDb.sql(
+          dir,
+          (
+            sample.offers.map(o =>
+              s"INSERT INTO offers VALUES ('${sample.id.value}', '${o.id.value}') ON CONFLICT DO NOTHING"
+            ) ++
+              SampleData.leistungen.value.zipWithIndex.map { case ((p, l), i) =>
+                s"INSERT INTO leistungen VALUES ('${p.value}', '${l.id.value}', '${l.category.value}', '${l.name.value}', ${i - 1000}, false) ON CONFLICT DO NOTHING"
+              }
+          )*
+        )
+      )
       .map(repo =>
         TestApp(
           Api(repo, sample.id, extractor, FileStore(dir.resolve("angebote"))).routes.orNotFound,

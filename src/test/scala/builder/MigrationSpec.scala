@@ -83,3 +83,79 @@ class MigrationSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
         user._2 should include("Gerüst stellen")
     )
   }
+
+  "runtime startup and restart leave an empty database empty" in {
+    TestApp.tempDir.use(dir =>
+      TestDb
+        .config(dir)
+        .flatMap(config =>
+          List(1, 2)
+            .traverse_ { _ =>
+              builder.repo.PostgresProjectRepository.resource(config).use { repo =>
+                val home = builder.domain.ProjectId.from("default").toOption.get
+                val demo = builder.domain.ProjectId.from("demo").toOption.get
+                val http = builder.http
+                  .Api(repo, home, extractor, builder.storage.FileStore(dir.resolve("angebote")))
+                  .routes
+                  .orNotFound
+                for
+                  project <- repo.find(demo)
+                  response <- http.run(Request[IO](Method.GET, Uri.unsafeFromString("/")))
+                  totals <- http
+                    .run(Request[IO](Method.GET, Uri.unsafeFromString("/projects/demo/totals")))
+                  rows <- List(
+                    "offers",
+                    "uploads",
+                    "categories",
+                    "leistungen",
+                    "favorites",
+                    "item_leistung",
+                    "abdeckung",
+                    "ratings",
+                    "weights"
+                  ).traverse(count(dir, _))
+                yield
+                  project shouldBe Left(builder.repo.RepoError.ProjectNotFound(demo))
+                  response.status shouldBe Status.NotFound
+                  totals.status shouldBe Status.NotFound
+                  rows shouldBe List.fill(9)(0)
+              }
+            }
+            .as(succeed)
+        )
+    )
+  }
+
+  "runtime default shell serves home without writing rows" in {
+    TestApp.tempDir.use(dir =>
+      TestDb
+        .config(dir)
+        .flatMap(config =>
+          List(1, 2)
+            .traverse_ { _ =>
+              val shell = Main.defaultProject.toOption.get
+              builder.repo.PostgresProjectRepository.resource(config, List(shell)).use { repo =>
+                val http = builder.http
+                  .Api(
+                    repo,
+                    shell.id,
+                    extractor,
+                    builder.storage.FileStore(dir.resolve("angebote"))
+                  )
+                  .routes
+                  .orNotFound
+                for
+                  response <- http.run(Request[IO](Method.GET, Uri.unsafeFromString("/")))
+                  rows <- List("offers", "uploads", "categories", "leistungen", "favorites")
+                    .traverse(count(dir, _))
+                yield
+                  shell.offers shouldBe Nil
+                  shell.categories shouldBe Nil
+                  response.status shouldBe Status.Ok
+                  rows shouldBe List.fill(5)(0)
+              }
+            }
+            .as(succeed)
+        )
+    )
+  }
