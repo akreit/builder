@@ -102,7 +102,13 @@ object Matrix:
       .collect { case (k, Some(e)) => k -> e }
       .toMap
 
-  /** Builds one matrix cell from coverage, mapped items and known prices. */
+  /** Builds one matrix cell. Price is the sum of mapped item totals when every item has a readable
+    * price; otherwise `None`. Defaults when there is no Manual/Read entry: mapped items →
+    * [[Coverage.Enthalten]] / [[CoverageSource.FromItems]] (`flagged` if prices unreadable); no
+    * items → [[Coverage.Unklar]] / [[CoverageSource.Unknown]] and `flagged`. A Read entry sets
+    * `flagged` for Unklar, low confidence, status/items conflict, or unreadable prices; Manual is
+    * never flagged.
+    */
   def cell(
       read: Option[CoverageEntry],
       items: List[Int],

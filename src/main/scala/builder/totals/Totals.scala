@@ -72,7 +72,9 @@ object Totals:
     )
     val counted = cats.collect { case CategoryTotal(_, s: CategoryStatus.Counted) => s }
     // Project.from guarantees every amount is in `cur`, so plain minor-unit sums are safe.
-    /** Sums a money field over all counted categories in the project currency. */
+    /** Sums a money field over counted categories by minor units (same currency via
+      * [[Project.from]]).
+      */
     def total(f: CategoryStatus.Counted => Money): Money =
       Money(MinorUnits(counted.map(f(_).minor.value).sum), cur)
     ProjectTotals(project.id, cur, cats, total(_.net), total(_.gross))

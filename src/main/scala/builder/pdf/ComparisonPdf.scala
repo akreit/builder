@@ -114,7 +114,9 @@ object ComparisonPdf:
   private def safeText(font: PDType1Font, s: String): String =
     s.map(c => if Try(font.encode(c.toString)).isSuccess then c else '?')
 
-  /** Word-wraps text to `width` (PDF user units), keeping explicit newlines. */
+  /** Breaks lines to `width` (PDF user units) by character width (may split words); keeps explicit
+    * newlines as hard breaks. Uses [[safeText]] so unencodable glyphs become `?`.
+    */
   private def wrapped(font: PDType1Font, s: String, width: Float): List[String] =
     s.split("\n", -1).toList.flatMap { line =>
       val (done, last) =
@@ -167,7 +169,9 @@ object ComparisonPdf:
       )
     }
 
-  /** Renders every offer-batch page for one project category. */
+  /** Builds the category matrix, batches offer columns by 3, wraps cell text with [[wrapped]], and
+    * writes paginated landscape pages (33 body lines each) via [[writePage]].
+    */
   private def renderCategory(
       doc: PDDocument,
       font: PDType1Font,

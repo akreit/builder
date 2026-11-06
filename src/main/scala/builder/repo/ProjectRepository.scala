@@ -131,10 +131,10 @@ trait ProjectRepository:
   ): IO[Either[RepoError, ProjectView]]
 
   /** Deletes the uploaded offer `offer` of `category` in `id` (cascades uploads, favorites,
-    * assignments and coverage). After a successful transaction, `cleanup` runs still under the
-    * repository lock (same pattern as upload `finish`) so a concurrent upload cannot interleave
-    * with file removal. A hard kill mid-cleanup can still leave an orphan file — the lock does not
-    * survive process death. Returns the updated project view.
+    * assignments and coverage). After a successful transaction, `cleanup.attempt` runs still under
+    * the repository lock (same pattern as upload `finish`: cleanup errors are discarded) so a
+    * concurrent upload cannot interleave with file removal. A hard kill mid-cleanup can still leave
+    * an orphan file — the lock does not survive process death. Returns the updated project view.
     */
   def deleteOffer(
       id: ProjectId,
@@ -151,7 +151,8 @@ trait ProjectRepository:
     * guess them beforehand. Under the lock, `prepare` first puts the file durably in place
     * (returning how to undo it); only then is the transaction run. If it fails or is canceled the
     * file step is rolled back, so DB and file never disagree, and a concurrent replace cannot
-    * interleave.
+    * interleave. After a successful commit the implementation runs `finish.attempt` (finish errors
+    * are discarded; only orphan backups may remain).
     */
   def addUpload(
       id: ProjectId,
@@ -393,7 +394,9 @@ final class PostgresProjectRepository private (
       }
     )
 
-  /** Deletes the offer row then runs `cleanup` still under the lock; reloads the view. */
+  /** Deletes the offer row under the mutex, then runs `cleanup.attempt` still under the lock
+    * (cleanup failures are ignored; a hard kill can still orphan the file) and reloads the view.
+    */
   def deleteOffer(
       id: ProjectId,
       category: CategoryId,
@@ -423,7 +426,11 @@ final class PostgresProjectRepository private (
       }
     )
 
-  /** Inserts/replaces an upload under the lock, running `prepare` for the file step. */
+  /** Inserts or replaces an upload under the mutex. Same-firm+recipient keep/obsolete ids are
+    * decided from a fresh load. Under `IO.uncancelable`: `prepare` (file install) runs **before**
+    * `poll(transact)`; on txn error/cancel `step.rollback` restores the prior file; after commit
+    * `step.finish.attempt` runs (finish failures are ignored — DB and live file already agree).
+    */
   def addUpload(
       id: ProjectId,
       upload: Upload,

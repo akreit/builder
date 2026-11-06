@@ -62,7 +62,7 @@ final class FileStore(dir: Path):
   def finish(installed: FileStore.Installed): IO[Unit] =
     installed.backups.traverse_(b => IO.blocking(Files.deleteIfExists(b.backup)).void)
 
-  /** Recursively moves remaining live paths aside, collecting backups. */
+  /** Walks `rest` with [[moveAside]]; on any failure restores `done` backups then re-raises. */
   private def aside(rest: List[Path], done: List[FileStore.Backup]): IO[List[FileStore.Backup]] =
     rest match
       case Nil          => IO.pure(done)
@@ -72,7 +72,7 @@ final class FileStore(dir: Path):
           case Left(e)  => restore(done) >> IO.raiseError(e)
         }
 
-  /** Moves one live file to a `.bak` sibling when it exists. */
+  /** If `live` exists, atomically moves it to a unique `.bak-<uuid>` sibling; else `None`. */
   private def moveAside(live: Path): IO[Option[FileStore.Backup]] =
     IO.blocking(Files.exists(live))
       .flatMap(exists =>
@@ -85,7 +85,7 @@ final class FileStore(dir: Path):
           )
       )
 
-  /** Restores backed-up files after a failed install/transaction. */
+  /** Atomically moves each backup back onto its live path (REPLACE_EXISTING). */
   private def restore(backups: List[FileStore.Backup]): IO[Unit] =
     backups.traverse_(b =>
       IO.blocking(

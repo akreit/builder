@@ -48,7 +48,10 @@ object Ranking:
   /** Rounds score points to one decimal place (HALF_UP). */
   private def round(d: BigDecimal): BigDecimal = d.setScale(1, RoundingMode.HALF_UP)
 
-  /** True when the cell counts as covered for the shared-Leistungen set. */
+  /** True when coverage is [[Coverage.Enthalten]] and the cell has a readable price. Gates
+    * [[commonLeistungen]]: other coverage values are false even if the offer “covers” the Leistung
+    * in a looser sense.
+    */
   private def included(c: Cell): Boolean = c.coverage match
     case Coverage.Enthalten                                                  => c.price.isDefined
     case Coverage.NichtEnthalten | Coverage.Ausgeschlossen | Coverage.Unklar => false
@@ -72,7 +75,8 @@ object Ranking:
     case UploadStatus.Accepted(_, _)                                    => true
     case UploadStatus.Rejected(_, _) | UploadStatus.ExtractionFailed(_) => false
 
-  /** Builds a scored criterion result with detail text. */
+  /** [[CriterionResult.Scored]] constructor (points already on the 0–100 scale for that criterion).
+    */
   private def score(points: BigDecimal, detail: String) = CriterionResult.Scored(points, detail)
 
   /** Cells of accepted columns only, per Leistung, in the order of `good`. */

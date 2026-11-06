@@ -168,7 +168,7 @@ object Api:
       case other               => Left(s"Unbekannte Aktion: $other")
     }
 
-  /** Required non-empty trimmed form field, or a German "missing field" error. */
+  /** Required non-empty trimmed form value; missing/blank → `Left("Feld '<k>' fehlt")`. */
   private def field(form: Map[String, String], k: String): Either[String, String] =
     form.get(k).map(_.trim).filter(_.nonEmpty).toRight(s"Feld '$k' fehlt")
 
@@ -183,7 +183,9 @@ object Api:
   private def categoryName(form: Map[String, String]): Either[String, CategoryName] =
     field(form, "name").flatMap(n => domain(CategoryName.from(n)))
 
-  /** Parses a new category name with a dedicated empty-name message. */
+  /** `name` via [[CategoryName.from]]; blank/missing → dedicated "Bitte einen Namen eingeben"
+    * message.
+    */
   private def newCategoryName(form: Map[String, String]): Either[String, CategoryName] =
     form.get("name").map(_.trim).filter(_.nonEmpty) match
       case Some(n) => domain(CategoryName.from(n))
@@ -201,7 +203,8 @@ object Api:
   private def offerId(form: Map[String, String]): Either[String, OfferId] =
     field(form, "angebot").flatMap(o => domain(OfferId.from(o)))
 
-  /** Parses 1-based `position` into a 0-based index. */
+  /** Parses `position` as Int ≥ 1 and returns the 0-based index; else `Left("Ungültige Position")`.
+    */
   private def positionIndex(form: Map[String, String]): Either[String, Int] =
     field(form, "position").flatMap(
       _.toIntOption.filter(_ >= 1).map(_ - 1).toRight("Ungültige Position")
@@ -265,7 +268,9 @@ final class Api(
     extractor: OfferExtractor[IO],
     files: FileStore
 ):
-  /** JSON totals for a project id, or a typed API error. */
+  /** JSON totals for a project id. [[RepoError.Storage]] → [[ApiError.StorageFailed]]; every other
+    * repository error collapses to [[ApiError.ProjectNotFound]] (including invalid/rejected).
+    */
   private def totalsLogic(raw: String): IO[Either[ApiError, TotalsResponse]] =
     ProjectId.from(raw) match
       case Left(_)   => IO.pure(Left(ApiError.InvalidProjectId(raw)))
@@ -282,7 +287,10 @@ final class Api(
             }
           )
 
-  /** PDF bytes of the Leistungsvergleich for a project id. */
+  /** PDF bytes of the Leistungsvergleich. Renders via `IO.blocking(ComparisonPdf.render)`. Render
+    * `Left` becomes [[ApiError.StorageFailed]] (`"pdf-export"`); [[RepoError.Storage]] maps to
+    * StorageFailed; other repository errors collapse to [[ApiError.ProjectNotFound]].
+    */
   private def comparisonPdfLogic(raw: String): IO[Either[ApiError, Array[Byte]]] =
     ProjectId.from(raw) match
       case Left(_)   => IO.pure(Left(ApiError.InvalidProjectId(raw)))
@@ -360,7 +368,9 @@ final class Api(
     else Right(())
   }
 
-  /** Marks a favorite and returns the re-rendered project fragment. */
+  /** Validates path ids, calls [[ProjectRepository.setFavorite]], returns the project fragment (or
+    * [[repoError]]). CSRF is enforced on the endpoint, not here.
+    */
   private def favoriteLogic(
       projectId: String,
       categoryId: String,
@@ -380,7 +390,9 @@ final class Api(
           case Left(e) => Left(repoError(e))
         }
 
-  /** Deletes an offer (DB + file cleanup under the lock) and re-renders the fragment. */
+  /** Validates ids, calls [[ProjectRepository.deleteOffer]] with `files.deleteAll` as cleanup
+    * (cleanup errors ignored inside the repo), returns the project fragment. CSRF on the endpoint.
+    */
   private def deleteOfferLogic(
       projectId: String,
       categoryId: String,
@@ -403,7 +415,9 @@ final class Api(
             Right(Pages.projectFragment(view, Pages.activeCategory(view, Some(c))))
         }
 
-  /** Maps a [[RepoError]] to an htmx HTML error fragment. */
+  /** Maps [[RepoError]] to htmx fragments: not-found → 404, ItemNotFound/Invalid → 422, Rejected →
+    * 409, Storage → 500.
+    */
   private def repoError(e: RepoError): HtmlError = e match
     case RepoError.ProjectNotFound(_) =>
       fragmentError(StatusCode.NotFound, "Projekt nicht gefunden")
@@ -445,7 +459,9 @@ final class Api(
   private def newOfferId: IO[Either[DomainError, OfferId]] =
     UUIDGen[IO].randomUUID.map(u => OfferId.from(s"upl-${u.toString.replace("-", "").take(12)}"))
 
-  /** Validates, extracts, stores an upload and returns the project fragment HTML. */
+  /** Upload endpoint body: [[validateUpload]], ensure category exists, then [[runUpload]].
+    * Repository errors become htmx fragments via [[repoError]].
+    */
   private def uploadLogic(
       projectId: String,
       categoryId: String,
@@ -470,7 +486,9 @@ final class Api(
       fileName: Option[String]
   )
 
-  /** Checks file presence, ids, media type and size before any I/O. */
+  /** Pure checks before extract/store: missing file → 400; bad ids → 400; unknown magic → 415; over
+    * [[OfferFileType.maxBytes]] → 413. No disk or extractor I/O.
+    */
   private def validateUpload(
       form: UploadForm,
       projectId: String,
@@ -501,7 +519,9 @@ final class Api(
       )
     yield UploadInput(ids._1, ids._2, fileType, bytes, datei.fileName)
 
-  /** Extract, stage file, install under the repository lock, then re-render the category fragment.
+  /** Extracts with the category known Leistungen into a draft [[Upload]] (failed extraction becomes
+    * [[UploadOutcome.Failed]] but is still stored). Cancel mid-extract leaves no staged file. Then
+    * [[storeUpload]].
     */
   private def runUpload(view: ProjectView, input: UploadInput): IO[Either[HtmlError, String]] =
     val known = view.leistungen.filter(_.category == input.category)
@@ -527,7 +547,10 @@ final class Api(
         storeUpload(input.project, input.category, input.bytes, input.fileType, read)
     }
 
-  /** Stage bytes, run [[ProjectRepository.addUpload]] with install/rollback, return HTML fragment.
+  /** Stages bytes, then under `IO.uncancelable` runs [[ProjectRepository.addUpload]] whose
+    * `prepare` installs the staged file (rollback on txn fail/cancel; finish deletes backups and
+    * obsolete files). Discards the staged file on repo failure or fiber cancel; returns the
+    * fragment.
     */
   private def storeUpload(
       project: ProjectId,

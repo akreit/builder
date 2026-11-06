@@ -22,7 +22,8 @@ object Format:
       DecimalFormatSymbols.getInstance(Locale.GERMANY)
     )
 
-  /** German-formatted money string with currency symbol. */
+  /** German grouping/decimal (Locale.GERMANY) plus [[symbol]]; uses a fresh DecimalFormat per call.
+    */
   def money(m: Money): String =
     s"${pattern(m.currency.minorDigits).format(m.toDecimal.bigDecimal)} ${symbol(m.currency)}"
 
@@ -31,5 +32,5 @@ object Format:
   /** Score with one decimal, German style ("87,5"). */
   def decimal(d: BigDecimal): String = pattern(1).format(d.bigDecimal)
 
-  /** German-formatted calendar date. */
+  /** Formats as `dd.MM.yyyy` (fixed German pattern). */
   def date(d: LocalDate): String = dateFormat.format(d)
