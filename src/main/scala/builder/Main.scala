@@ -32,18 +32,26 @@ object Main extends IOApp.Simple:
   private val model: String =
     sys.env.lift("ANTHROPIC_MODEL").filter(_.nonEmpty).getOrElse(ClaudeOfferExtractor.DefaultModel)
 
+  /** The empty default project shell (`id=default`): no categories, Leistungen, offers or
+    * favorites.
+    */
+  private[builder] val defaultProject: Either[builder.domain.DomainError, builder.domain.Project] =
+    builder.domain.ProjectId
+      .from("default")
+      .flatMap(id =>
+        builder.domain.Project
+          .from(id, "Mein Projekt", builder.domain.Currency.EUR, Nil, Nil, Nil, Map.empty)
+      )
+
   def run: IO[Unit] =
     val app = for
-      project <- cats.effect.Resource.eval(
+      // Empty in-memory shell so `/` has a project to open; no offers, categories or DB rows.
+      shell <- cats.effect.Resource.eval(
         IO.fromEither(
-          SampleData.project.left.map(e => IllegalStateException(s"Invalid sample data: $e"))
+          defaultProject.left.map(e => IllegalStateException(s"Invalid home project: $e"))
         )
       )
-      leistungen <- cats.effect.Resource.eval(
-        IO.fromEither(
-          SampleData.leistungen.left.map(e => IllegalStateException(s"Invalid sample data: $e"))
-        )
-      )
+      home = shell.id
       db <- cats.effect.Resource.eval(
         IO.fromEither(
           DbConfig
@@ -52,11 +60,7 @@ object Main extends IOApp.Simple:
             .map(e => IllegalStateException(s"Datenbank-Konfiguration ungültig: $e"))
         )
       )
-      repo <- PostgresProjectRepository.resource(
-        db,
-        List(project),
-        leistungen
-      )
+      repo <- PostgresProjectRepository.resource(db, List(shell))
       claude <- ClaudeOfferExtractor.resource(ApiKey.fromEnv, model)
       passes <- cats.effect.Resource.eval(OfferPass.bounded(claude, permits = 2))
       extractor = MultiPassOfferExtractor(passes)
@@ -67,7 +71,7 @@ object Main extends IOApp.Simple:
         .withIdleTimeout(5.minutes)
         .withRequestHeaderReceiveTimeout(10.seconds)
         .withHttpApp(
-          Api(repo, project.id, extractor, FileStore(dataDir.resolve("angebote"))).routes.orNotFound
+          Api(repo, home, extractor, FileStore(dataDir.resolve("angebote"))).routes.orNotFound
         )
         .build
     yield (server, db)

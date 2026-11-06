@@ -28,17 +28,23 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
       bytes: Array[Byte],
       name: String = "angebot.pdf",
       category: String = "fenster",
-      headers: List[(String, String)] = List("HX-Request" -> "true")
+      headers: List[(String, String)] = List("HX-Request" -> "true"),
+      view: Option[String] = None,
+      project: String = "demo"
   ): IO[(Status, String)] =
     Multiparts
       .forSync[IO]
       .flatMap(
-        _.multipart(Vector(Part.fileData[IO]("datei", name, Stream.emits(bytes.toIndexedSeq))))
+        _.multipart(
+          Vector(
+            Part.fileData[IO]("datei", name, Stream.emits(bytes.toIndexedSeq))
+          ) ++ view.toVector.map(v => Part.formData[IO]("ansicht", v))
+        )
       )
       .flatMap { mp =>
         val req = Request[IO](
           Method.POST,
-          Uri.unsafeFromString(s"/ui/projects/demo/categories/$category/angebote")
+          Uri.unsafeFromString(s"/ui/projects/$project/categories/$category/angebote")
         ).withEntity(mp)
           .putHeaders(mp.headers)
           .putHeaders(headers.map(Header.ToRaw.keyValuesToRaw)*)
@@ -417,5 +423,48 @@ class UploadSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
         before shouldBe "21118.50"
         after shouldBe "26128.50"
         body should include("26.128,50 €")
+    }
+  }
+
+  "an htmx multipart upload accepts datei with the inherited ansicht field" in {
+    withApp(Right(dachfenster)) { app =>
+      upload(app, pdf, view = Some("fenster")).asserting { (status, body) =>
+        status shouldBe Status.Ok
+        body should include("Zimmerei Erfunden GmbH")
+        body should include("Ausgelesen und geprüft")
+      }
+    }
+  }
+
+  "uploads against an empty runtime database report the missing project without extracting or storing" in {
+    val counting = CountingExtractor(Right(dachfenster))
+    TestApp.tempDir.use { dir =>
+      TestDb.config(dir).flatMap { config =>
+        builder.repo.PostgresProjectRepository.resource(config).use { repo =>
+          val home = builder.domain.ProjectId.from("default").toOption.get
+          val app = TestApp(
+            builder.http
+              .Api(repo, home, counting, builder.storage.FileStore(dir.resolve("angebote")))
+              .routes
+              .orNotFound,
+            dir
+          )
+          for
+            results <- List("default", "demo")
+              .traverse(p => upload(app, pdf, view = Some("fenster"), project = p))
+            calls <- counting.calls
+            files <- storedFiles(app)
+            rows <- TestDb.ints(dir, "SELECT count(*)::int FROM offers")
+          yield
+            results.foreach { (status, body) =>
+              status shouldBe Status.NotFound
+              body should include("Projekt nicht gefunden")
+              body should not include "fehlt"
+            }
+            calls shouldBe 0
+            files shouldBe Nil
+            rows shouldBe List(0)
+        }
+      }
     }
   }
