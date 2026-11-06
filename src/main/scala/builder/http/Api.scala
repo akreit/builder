@@ -11,9 +11,7 @@ import cats.effect.IO
 import cats.effect.Outcome
 import cats.effect.std.UUIDGen
 import cats.syntax.all.*
-import io.circe.Codec
 import org.http4s.HttpRoutes
-import sttp.model.Part
 import sttp.model.StatusCode
 import sttp.monad.MonadError
 import sttp.tapir.*
@@ -27,127 +25,7 @@ import sttp.tapir.server.interceptor.decodefailure.DefaultDecodeFailureHandler
 import sttp.tapir.server.model.EndpointExtensions.*
 import sttp.tapir.server.model.ValuedEndpointOutput
 
-final case class HealthResponse(status: String) derives Codec.AsObject, Schema
-
-final case class CategoryTotalDto(
-    categoryId: String,
-    category: String,
-    status: String,
-    offerId: Option[String],
-    contractor: Option[String],
-    reason: Option[String],
-    net: Option[String],
-    gross: Option[String],
-    candidateOfferIds: List[String]
-) derives Codec.AsObject,
-      Schema
-
-final case class TotalsResponse(
-    projectId: String,
-    currency: String,
-    net: String,
-    gross: String,
-    complete: Boolean,
-    categories: List[CategoryTotalDto],
-    missingCategories: List[String],
-    undecidedCategories: List[String]
-) derives Codec.AsObject,
-      Schema
-
-object TotalsResponse:
-  def from(t: ProjectTotals): TotalsResponse =
-    TotalsResponse(
-      projectId = t.projectId.value,
-      currency = t.currency.code,
-      net = t.net.show,
-      gross = t.gross.show,
-      complete = t.isComplete,
-      categories = t.categories.map(toDto),
-      missingCategories = t.missingCategories.map(_.name.value),
-      undecidedCategories = t.undecidedCategories.map(_.name.value)
-    )
-
-  private def toDto(ct: CategoryTotal): CategoryTotalDto =
-    val cid = ct.category.id.value
-    val name = ct.category.name.value
-    ct.status match
-      case CategoryStatus.Counted(id, c, net, gross, r) =>
-        CategoryTotalDto(
-          cid,
-          name,
-          "counted",
-          Some(id.value),
-          Some(c.name),
-          Some(r.toString),
-          Some(net.show),
-          Some(gross.show),
-          Nil
-        )
-      case CategoryStatus.NoOffer =>
-        CategoryTotalDto(cid, name, "no-offer", None, None, None, None, None, Nil)
-      case CategoryStatus.NeedsDecision(ids) =>
-        CategoryTotalDto(
-          cid,
-          name,
-          "needs-decision",
-          None,
-          None,
-          None,
-          None,
-          None,
-          ids.map(_.value)
-        )
-
-/** Errors the JSON API can return; each case maps to one status code and JSON body. */
-enum ApiError:
-  case InvalidProjectId(projectId: String)
-  case ProjectNotFound(projectId: String)
-  case StorageFailed(code: String)
-
-object ApiError:
-  given Codec.AsObject[InvalidProjectId] = Codec.AsObject.derived
-  given Codec.AsObject[ProjectNotFound] = Codec.AsObject.derived
-  given Schema[InvalidProjectId] = Schema.derived
-  given Schema[ProjectNotFound] = Schema.derived
-  given Codec.AsObject[StorageFailed] = Codec.AsObject.derived
-  given Schema[StorageFailed] = Schema.derived
-
-  val output: EndpointOutput.OneOf[ApiError, ApiError] = oneOf[ApiError](
-    oneOfVariant(StatusCode.BadRequest, jsonBody[InvalidProjectId]),
-    oneOfVariant(StatusCode.NotFound, jsonBody[ProjectNotFound]),
-    oneOfVariant(StatusCode.InternalServerError, jsonBody[StorageFailed])
-  )
-
-/** Response of the start route: a redirect to the first tab, or the page without categories. */
-enum Landing:
-  case Redirect(location: String)
-  case Page(html: String)
-
-/** Error of an HTML endpoint: status code plus a German HTML message. */
-final case class HtmlError(status: StatusCode, html: String)
-
-/** Headers of the CSRF guard; checked (security input) before any body is read. */
-final case class HtmxHeaders(
-    hxRequest: Option[String],
-    origin: Option[String],
-    host: Option[String]
-)
-
-/** The multipart form of an upload: only the `datei` part is decoded, other parts are skipped. */
-final case class UploadForm(datei: Option[Part[Array[Byte]]])
-
-object UploadForm:
-  /** Tapir's raw multipart codec, restricted to the `datei` part (no default part type, so other
-    * parts are not read into memory). Hand-written: the derived codec warns under -Werror.
-    */
-  given MultipartCodec[UploadForm] =
-    MultipartCodec(
-      RawBodyType.MultipartBody(Map("datei" -> RawBodyType.ByteArrayBody), None),
-      MultipartCodec.Default.codec.map(parts => UploadForm(parts.find(_.name == "datei")))(form =>
-        form.datei.toList
-      )
-    )
-
+/** Tapir endpoint descriptions for health, totals, HTML pages, edits and uploads. */
 object Endpoints:
   val comparisonPdf = endpoint.get
     .in("projekte" / path[String]("projectId") / "leistungsvergleich.pdf")
@@ -341,6 +219,7 @@ object Api:
     */
   val MaxRequestBytes: Long = OfferFileType.Pdf.maxBytes.toLong + 64 * 1024
 
+/** HTTP wiring: maps endpoints to repository, file store and HTML pages. */
 final class Api(
     repo: ProjectRepository,
     home: ProjectId,
