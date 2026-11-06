@@ -49,37 +49,36 @@ Das Image entsteht ohne zusätzliche sbt-Plugins: `sbt stage` kopiert alle Laufz
 
 ## Datenbank
 
-> **Achtung beim Umstieg von SQLite (Stand vor #8):** Daten der SQLite-Version werden **nicht**
-> übernommen, es gibt keinen Import. Bisher gab es nur Testdaten. Alte Uploads und das alte Volume
-> einmal entfernen mit `docker compose down -v`, danach `docker compose up -d --build` startet mit
-> einer leeren Postgres-Datenbank.
+Die App speichert in Postgres (Zugriff mit [Skunk](https://typelevel.org/skunk/)). Beim Start
+verbindet sie sich, legt das Schema an bzw. wendet ausstehende Migrationen an (Tabelle
+`schema_migrations`; jede Migration in einer eigenen Transaktion mit `pg_advisory_xact_lock`,
+damit parallele Starts sie nur einmal ausführen). Aktuell: Migration 1 (Tabellen) und Migration 2
+(Standardkategorien Dach, Fenster, Fassadendämmung, Elektrik, Heizung, Innenausbau; Daten der
+alten Standardkategorien wie Gauben/Dämmung/… werden dabei entfernt, nutzerangelegte Kategorien
+bleiben). SQLite gibt es im Code nicht mehr.
 
-> **Achtung, Migration 2 (Kategorien als Tabs, #14):** Die alten Standardkategorien (Gauben,
-> Dämmung, Spenglerarbeiten, Balkondämmung, Dachfenster, Sonstiges) werden **samt ihrer Daten**
-> entfernt: hochgeladene Angebote und Uploads, Favoriten, Leistungen mit Zuordnungen und
-> Abdeckung, Kategorie-Änderungen sowie die alten Beispielangebote. Neue Standardkategorien sind
-> Dach, Fenster, Fassadendämmung, Elektrik, Heizung, Innenausbau. Von Nutzern angelegte Kategorien
-> behalten ihre Daten. Bisher gab es nur Testdaten; für einen sauberen Start
-> `docker compose down -v`.
+Verbindung über `DATABASE_URL` (`postgres://user:passwort@host:5432/db`) oder einzeln
+`DATABASE_HOST`, `DATABASE_PORT` (Default 5432), `DATABASE_USER`, `DATABASE_PASSWORD`,
+`DATABASE_NAME`. Das Passwort wird nie geloggt. Unter Docker Compose setzt der Service `builder`
+die Einzelvariablen gegen den Service `db` (`postgres:17-alpine`, Volume `builder-pg`); siehe
+`.env.example` für `POSTGRES_*`.
 
-Die App speichert in Postgres (Zugriff mit [Skunk](https://typelevel.org/skunk/)). Verbindung über
-`DATABASE_URL` (`postgres://user:passwort@host:5432/db`) oder einzeln `DATABASE_HOST`,
-`DATABASE_PORT` (Default 5432), `DATABASE_USER`, `DATABASE_PASSWORD`, `DATABASE_NAME`.
-Das Passwort wird nie geloggt. Für `sbt run` ohne Compose z. B.:
+Für `sbt run` ohne den App-Container z. B.:
 
 ```sh
 docker compose up -d db   # nur an 127.0.0.1:5432 erreichbar (anderer Port: POSTGRES_PORT)
 DATABASE_URL=postgres://builder:<passwort>@localhost:5432/builder sbt run
 ```
 
+Hochgeladene Angebotsdateien liegen lokal unter `BUILDER_DATA_DIR` (Default `data/`, in Compose
+Volume `builder-data` → `/data`), verwaltet über `FileStore`. Gehosteter Objektspeicher ist noch
+geplant (#6).
+
 Tests laufen gegen ein echtes Postgres: ohne weitere Einstellung startet `sbt testFull` per
 [Testcontainers](https://testcontainers.com/) einen `postgres:17-alpine`-Container (Docker nötig).
 Alternativ einen vorhandenen Server nutzen:
 `BUILDER_TEST_DATABASE_URL=postgres://postgres:<passwort>@localhost:5432/postgres sbt testFull`
 (Superuser, jede Testgruppe bekommt eine eigene, danach gelöschte Datenbank).
-
-Object Storage für die Dateien folgt in #6; dieser Schritt deckt davon nur den Datenbank-Teil
-lokal ab.
 
 ## Formatting
 
