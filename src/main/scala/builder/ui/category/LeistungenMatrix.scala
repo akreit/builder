@@ -140,6 +140,9 @@ object LeistungenMatrix:
     val leistungen = m.rows.map(_.leistung)
     tags2.section(cls := "leistungen", attr("data-kategorie") := category.id.value)(
       h3("Leistungsvergleich"),
+      a(href := s"/projekte/${project.id.value}/leistungsvergleich.pdf", cls := "button")(
+        "PDF exportieren"
+      ),
       if m.rows.isEmpty && m.columns.isEmpty then
         p(cls := "hinweis")(
           "Noch keine Leistungen – sie werden beim ersten hochgeladenen Angebot erkannt."

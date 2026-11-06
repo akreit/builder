@@ -171,3 +171,40 @@ class CategoryTabsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
   "the header falls back to the app name for a blank project name" in {
     IO(builder.ui.layout.Header.title(Some("  "))).asserting(_ shouldBe "Builder")
   }
+
+  "the comparison offers a normal PDF download link" in {
+    page(uri"/projekte/demo/kategorien/dach").asserting { (_, body, _) =>
+      body should include("PDF exportieren")
+      body should include("href=\"/projekte/demo/leistungsvergleich.pdf\"")
+    }
+  }
+
+  "the PDF endpoint returns a PDF attachment" in {
+    withApp(app =>
+      app
+        .run(Request[IO](Method.GET, uri"/projekte/demo/leistungsvergleich.pdf"))
+        .flatMap(r => r.body.compile.toVector.map(bytes => (r.status, r.headers, bytes)))
+    )
+      .asserting { (status, headers, bytes) =>
+        status shouldBe Status.Ok
+        headers.get(CIString("Content-Type")).map(_.head.value) shouldBe Some("application/pdf")
+        headers.get(CIString("Content-Disposition")).map(_.head.value) shouldBe
+          Some("attachment; filename=leistungsvergleich.pdf")
+        new String(
+          bytes.take(5).toArray,
+          java.nio.charset.StandardCharsets.US_ASCII
+        ) shouldBe "%PDF-"
+      }
+  }
+
+  "the PDF endpoint rejects invalid and missing projects" in {
+    withApp(app =>
+      for
+        invalid <- app.run(Request[IO](Method.GET, uri"/projekte/!/leistungsvergleich.pdf"))
+        missing <- app.run(Request[IO](Method.GET, uri"/projekte/nope/leistungsvergleich.pdf"))
+      yield (invalid.status, missing.status)
+    ).asserting { (invalid, missing) =>
+      invalid shouldBe Status.BadRequest
+      missing shouldBe Status.NotFound
+    }
+  }
