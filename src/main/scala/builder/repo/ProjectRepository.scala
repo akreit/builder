@@ -18,6 +18,7 @@ import skunk.implicits.*
 import java.time.Instant
 import java.time.ZoneOffset
 
+/** Failures from the project repository (not found, rejected edit, storage). */
 enum RepoError:
   case ProjectNotFound(id: ProjectId)
   case CategoryNotFound(id: CategoryId)
@@ -49,6 +50,7 @@ final case class Upload(
     outcome: UploadOutcome
 )
 
+/** How an upload appears in the UI and whether it counts toward totals. */
 enum UploadStatus:
   case ExtractionFailed(message: String)
 
@@ -58,6 +60,7 @@ enum UploadStatus:
   /** Validated and part of the project (and its running total). */
   case Accepted(raw: RawOffer, offer: Offer)
 
+/** An upload together with its derived [[UploadStatus]]. */
 final case class UploadView(upload: Upload, status: UploadStatus)
 
 /** Outcome of [[ProjectRepository.addUpload]]: which offer id the row landed on, and which same
@@ -114,7 +117,9 @@ enum Edit:
   case RateContractor(contractor: ContractorKey, rating: Option[Rating])
   case SetWeights(weights: Weights)
 
+/** Persistence API for projects: load, favorites, uploads, deletes and manual edits. */
 trait ProjectRepository:
+
   def find(id: ProjectId): IO[Either[RepoError, ProjectView]]
 
   /** Marks `offer` as the favorite of `category` and returns the updated project. */
@@ -168,19 +173,26 @@ private[repo] final case class UploadRow(
     failure: Option[String]
 )
 
+/** One `categories` row as stored. */
 private[repo] final case class CategoryRow(
     id: String,
     name: String,
     position: Int,
     deleted: Boolean
 )
+
+/** One `leistungen` row as stored. */
 private[repo] final case class LeistungRow(id: String, category: String, name: String)
+
+/** One `item_leistung` row as stored. */
 private[repo] final case class AssignmentRow(
     offer: String,
     item: Int,
     leistung: Option[String],
     manual: Boolean
 )
+
+/** One `abdeckung` row as stored. */
 private[repo] final case class CoverageRow(
     offer: String,
     leistung: String,
@@ -234,6 +246,7 @@ final class PostgresProjectRepository private (
         case Right(o)     => UploadStatus.Accepted(raw, o)
         case Left(issues) => UploadStatus.Rejected(raw, issues)
 
+  /** Decodes upload rows into a [[ProjectView]] shell (Leistungen/ratings filled by [[load]]). */
   private def build(
       seed: Project,
       rows: List[UploadRow],
@@ -242,29 +255,8 @@ final class PostgresProjectRepository private (
     val decoded = rows.map(r =>
       toUpload(r).left.map(_ => s"Gespeicherter Upload ${r.id} ist nicht lesbar und wird ignoriert")
     )
-    val (project, views) =
-      decoded.collect { case Right(u) => u }.foldLeft((seed, List.empty[UploadView])) {
-        case ((p, acc), u) =>
-          val s = status(p, u)
-          val next = s match
-            case UploadStatus.Accepted(_, o) => p.withOffer(o).getOrElse(p)
-            case UploadStatus.Rejected(_, _) | UploadStatus.ExtractionFailed(_) => p
-          (next, acc :+ UploadView(u, s))
-      }
-    val (withFavs, ignored) = favorites.foldLeft((project, List.empty[String])) {
-      case ((p, warnings), (c, o)) =>
-        (for
-          cat <- CategoryId.from(c)
-          offer <- OfferId.from(o)
-          next <- p.withFavorite(cat, offer)
-        yield next) match
-          case Right(next) => (next, warnings)
-          case Left(_)     =>
-            (
-              p,
-              warnings :+ s"Gespeicherter Favorit $o für Kategorie $c ist nicht (mehr) gültig und wird ignoriert"
-            )
-    }
+    val (project, views) = foldUploads(seed, decoded.collect { case Right(u) => u })
+    val (withFavs, ignored) = applyFavorites(project, favorites)
     ProjectView(
       withFavs,
       views,
@@ -275,6 +267,37 @@ final class PostgresProjectRepository private (
       Map.empty,
       Weights.default
     )
+
+  private def foldUploads(
+      seed: Project,
+      uploads: List[Upload]
+  ): (Project, List[UploadView]) =
+    uploads.foldLeft((seed, List.empty[UploadView])) { case ((p, acc), u) =>
+      val s = status(p, u)
+      val next = s match
+        case UploadStatus.Accepted(_, o) => p.withOffer(o).getOrElse(p)
+        case UploadStatus.Rejected(_, _) | UploadStatus.ExtractionFailed(_) => p
+      (next, acc :+ UploadView(u, s))
+    }
+
+  /** Applies stored favorites; invalid ones become warnings and are skipped. */
+  private def applyFavorites(
+      project: Project,
+      favorites: List[(String, String)]
+  ): (Project, List[String]) =
+    favorites.foldLeft((project, List.empty[String])) { case ((p, warnings), (c, o)) =>
+      (for
+        cat <- CategoryId.from(c)
+        offer <- OfferId.from(o)
+        next <- p.withFavorite(cat, offer)
+      yield next) match
+        case Right(next) => (next, warnings)
+        case Left(_)     =>
+          (
+            p,
+            warnings :+ s"Gespeicherter Favorit $o für Kategorie $c ist nicht (mehr) gültig und wird ignoriert"
+          )
+    }
 
   private def load(id: ProjectId): IO[Either[RepoError, ProjectView]] =
     projects.lift(id) match
@@ -289,37 +312,49 @@ final class PostgresProjectRepository private (
           cs <- EitherT(loadCoverage(id))
           rs <- EitherT(db.query(Sql.ratings, id.value))
           ws <- EitherT(db.query(Sql.weights, id.value))
-        yield
-          val (base, catWarnings) = withCategories(seed, cats)
-          val view = build(base, rows, favorites)
-          val categories = base.categories.map(_.id).toSet
-          val leistungen = ls.flatMap(r =>
-            (LeistungId.from(r.id), CategoryId.from(r.category), LeistungName.from(r.name))
-              .mapN(Leistung.apply)
-              .toOption
-              .filter(l => categories.contains(l.category))
-          )
-          view.copy(
-            warnings = catWarnings ++ view.warnings,
-            leistungen = leistungen,
-            assignments = as.flatMap(toAssignment),
-            coverage = cs.flatMap(toCoverage),
-            ratings = rs
-              .flatMap((k, n, note) =>
-                (ContractorKey.of(k), Stars.from(n).toOption)
-                  .mapN((key, stars) => key -> Rating(stars, note))
-              )
-              .toMap,
-            // Stored weights complete the defaults, so criteria added later get their default.
-            weights = Weights
-              .from(
-                Criterion.values.toList
-                  .map(c => c -> Weights.default.of(c))
-                  .toMap ++ ws.flatMap((c, w) => Criterion.fromCode(c).map(_ -> w))
-              )
-              .getOrElse(Weights.default)
-          )
-        ).value
+        yield enrichView(seed, rows, favorites, cats, ls, as, cs, rs, ws)).value
+
+  /** Combines seed project, DB rows and ranking tables into a full [[ProjectView]]. */
+  private def enrichView(
+      seed: Project,
+      rows: List[UploadRow],
+      favorites: List[(String, String)],
+      cats: List[CategoryRow],
+      ls: List[LeistungRow],
+      as: List[AssignmentRow],
+      cs: List[CoverageRow],
+      rs: List[(String, Int, String)],
+      ws: List[(String, Int)]
+  ): ProjectView =
+    val (base, catWarnings) = withCategories(seed, cats)
+    val view = build(base, rows, favorites)
+    val categories = base.categories.map(_.id).toSet
+    val leistungen = ls.flatMap(r =>
+      (LeistungId.from(r.id), CategoryId.from(r.category), LeistungName.from(r.name))
+        .mapN(Leistung.apply)
+        .toOption
+        .filter(l => categories.contains(l.category))
+    )
+    view.copy(
+      warnings = catWarnings ++ view.warnings,
+      leistungen = leistungen,
+      assignments = as.flatMap(toAssignment),
+      coverage = cs.flatMap(toCoverage),
+      ratings = rs
+        .flatMap((k, n, note) =>
+          (ContractorKey.of(k), Stars.from(n).toOption)
+            .mapN((key, stars) => key -> Rating(stars, note))
+        )
+        .toMap,
+      // Stored weights complete the defaults, so criteria added later get their default.
+      weights = Weights
+        .from(
+          Criterion.values.toList
+            .map(c => c -> Weights.default.of(c))
+            .toMap ++ ws.flatMap((c, w) => Criterion.fromCode(c).map(_ -> w))
+        )
+        .getOrElse(Weights.default)
+    )
 
   def find(id: ProjectId): IO[Either[RepoError, ProjectView]] = lock.lock.surround(load(id))
 
@@ -521,6 +556,7 @@ final class PostgresProjectRepository private (
       yield updated).value
     )
 
+  /** SQL statements that apply one [[Edit]] inside a transaction. */
   private def editStatements(
       id: ProjectId,
       view: ProjectView,
@@ -528,110 +564,27 @@ final class PostgresProjectRepository private (
       fresh: String
   ): Either[RepoError, List[Stmt[?]]] =
     val p = id.value
-    val project = view.project
-    def category(c: CategoryId): Either[RepoError, Category] =
-      project.categories.find(_.id == c).toRight(RepoError.CategoryNotFound(c))
-    def leistung(l: LeistungId): Either[RepoError, Leistung] =
-      view.leistungen
-        .find(_.id == l)
-        .toRight(RepoError.LeistungNotFound(l))
-    def upload(o: OfferId): Either[RepoError, (Upload, RawOffer)] =
-      view.uploads
-        .find(_.upload.id == o)
-        .flatMap(u =>
-          u.status match
-            case UploadStatus.Accepted(raw, _)    => Some(u.upload -> raw)
-            case UploadStatus.Rejected(raw, _)    => Some(u.upload -> raw)
-            case UploadStatus.ExtractionFailed(_) => None
-        )
-        .toRight(RepoError.OfferNotFound(o))
     e match
-      case Edit.AddCategory(name) =>
-        CategoryId
-          .from(s"k-$fresh")
-          .left
-          .map(RepoError.Invalid(_))
-          .map(c => List(Stmt(Sql.upsertCategory, (p, c.value, name.value, false))))
+      case Edit.AddCategory(name)       => stmtsAddCategory(p, name, fresh)
       case Edit.RenameCategory(c, name) =>
-        category(c).map(_ => List(Stmt(Sql.upsertCategory, (p, c.value, name.value, false))))
-      case Edit.DeleteCategory(c) =>
-        for
-          cat <- category(c)
-          _ <- Either.cond(
-            !view.uploads.exists(_.upload.category == c),
-            (),
-            RepoError.Rejected("Kategorie enthält hochgeladene Angebote")
-          )
-          _ <- Project
-            .from(
-              project.id,
-              project.name,
-              project.currency,
-              project.categories.filterNot(_.id == c),
-              project.workPackages,
-              project.offers,
-              project.favorites
-            )
-            .left
-            .map(_ =>
-              RepoError
-                .Rejected("Kategorie wird von Arbeitspaketen, Angeboten oder Favoriten verwendet")
-            )
-        yield List(
-          Stmt(Sql.upsertCategory, (p, c.value, cat.name.value, true)),
-          Stmt(Sql.deleteLeistungenOfCategory, (p, c.value))
+        requireCategory(view, c).map(_ =>
+          List(Stmt(Sql.upsertCategory, (p, c.value, name.value, false)))
         )
-      case Edit.AddLeistung(c, name) =>
-        for
-          _ <- category(c)
-          l <- LeistungId.from(s"l-$fresh").left.map(RepoError.Invalid(_))
-        yield List(Stmt(Sql.insertLeistung, (p, l.value, c.value, name.value)))
+      case Edit.DeleteCategory(c)       => stmtsDeleteCategory(p, view, c)
+      case Edit.AddLeistung(c, name)    => stmtsAddLeistung(p, view, c, name, fresh)
       case Edit.RenameLeistung(l, name) =>
-        leistung(l).map(_ => List(Stmt(Sql.renameLeistung, (p, l.value, name.value))))
-      case Edit.MergeLeistung(from, into) =>
-        for
-          f <- leistung(from)
-          t <- leistung(into)
-          _ <- Either.cond(
-            f.id != t.id,
-            (),
-            RepoError.Rejected("Eine Leistung kann nicht mit sich selbst zusammengeführt werden")
-          )
-          _ <- Either.cond(
-            f.category == t.category,
-            (),
-            RepoError.Rejected("Leistungen gehören zu verschiedenen Kategorien")
-          )
-        yield
-          val moved = (p, from.value, into.value)
-          List(
-            Stmt(Sql.moveItems, moved),
-            Stmt(Sql.mergeReadCoverage, moved),
-            Stmt(Sql.moveCoverage, moved),
-            Stmt(Sql.deleteCoverageOf, (p, from.value)),
-            Stmt(Sql.deleteLeistung, (p, from.value))
-          )
-      case Edit.DeleteLeistung(l) =>
-        leistung(l).map(_ =>
+        requireLeistung(view, l).map(_ => List(Stmt(Sql.renameLeistung, (p, l.value, name.value))))
+      case Edit.MergeLeistung(from, into) => stmtsMergeLeistung(p, view, from, into)
+      case Edit.DeleteLeistung(l)         =>
+        requireLeistung(view, l).map(_ =>
           List(
             Stmt(Sql.unassignItems, (p, l.value)),
             Stmt(Sql.deleteCoverageOf, (p, l.value)),
             Stmt(Sql.deleteLeistung, (p, l.value))
           )
         )
-      case Edit.AssignItem(o, item, target) =>
-        for
-          (_, raw) <- upload(o)
-          _ <- Either.cond(
-            raw.lineItems.indices.contains(item),
-            (),
-            RepoError.ItemNotFound(o, item)
-          )
-          // Cross-category grouping is allowed: a line item of an offer uploaded under one
-          // category may be assigned to a Leistung of another (manual scope grouping).
-          _ <- target.traverse(leistung)
-        yield List(Stmt(Sql.upsertManualItem, (p, o.value, item, target.map(_.value))))
-      case Edit.RateContractor(c, rating) =>
+      case Edit.AssignItem(o, item, target) => stmtsAssignItem(p, view, o, item, target)
+      case Edit.RateContractor(c, rating)   =>
         Right(rating match
           case Some(r) => List(Stmt(Sql.upsertRating, (p, c.value, r.stars.value, r.note)))
           case None    => List(Stmt(Sql.deleteRating, (p, c.value))))
@@ -639,14 +592,144 @@ final class PostgresProjectRepository private (
         Right(
           Criterion.values.toList.map(c => Stmt(Sql.upsertWeight, (p, Criterion.code(c), ws.of(c))))
         )
-      case Edit.SetCoverage(o, l, coverage) =>
-        for
-          _ <- upload(o)
-          _ <- leistung(l) // coverage may target a Leistung of another category (foreign column)
-        yield coverage match
-          case Some(c) =>
-            List(Stmt(Sql.upsertManualCoverage, (p, o.value, l.value, Coverage.code(c))))
-          case None => List(Stmt(Sql.deleteManualCoverage, (p, o.value, l.value)))
+      case Edit.SetCoverage(o, l, coverage) => stmtsSetCoverage(p, view, o, l, coverage)
+
+  private def requireCategory(view: ProjectView, c: CategoryId): Either[RepoError, Category] =
+    view.project.categories.find(_.id == c).toRight(RepoError.CategoryNotFound(c))
+
+  private def requireLeistung(view: ProjectView, l: LeistungId): Either[RepoError, Leistung] =
+    view.leistungen.find(_.id == l).toRight(RepoError.LeistungNotFound(l))
+
+  /** Accepted or rejected uploads expose their raw extraction; failed ones do not. */
+  private def requireUpload(view: ProjectView, o: OfferId): Either[RepoError, (Upload, RawOffer)] =
+    view.uploads
+      .find(_.upload.id == o)
+      .flatMap(u =>
+        u.status match
+          case UploadStatus.Accepted(raw, _)    => Some(u.upload -> raw)
+          case UploadStatus.Rejected(raw, _)    => Some(u.upload -> raw)
+          case UploadStatus.ExtractionFailed(_) => None
+      )
+      .toRight(RepoError.OfferNotFound(o))
+
+  private def stmtsAddCategory(
+      p: String,
+      name: CategoryName,
+      fresh: String
+  ): Either[RepoError, List[Stmt[?]]] =
+    CategoryId
+      .from(s"k-$fresh")
+      .left
+      .map(RepoError.Invalid(_))
+      .map(c => List(Stmt(Sql.upsertCategory, (p, c.value, name.value, false))))
+
+  private def stmtsDeleteCategory(
+      p: String,
+      view: ProjectView,
+      c: CategoryId
+  ): Either[RepoError, List[Stmt[?]]] =
+    val project = view.project
+    for
+      cat <- requireCategory(view, c)
+      _ <- Either.cond(
+        !view.uploads.exists(_.upload.category == c),
+        (),
+        RepoError.Rejected("Kategorie enthält hochgeladene Angebote")
+      )
+      _ <- Project
+        .from(
+          project.id,
+          project.name,
+          project.currency,
+          project.categories.filterNot(_.id == c),
+          project.workPackages,
+          project.offers,
+          project.favorites
+        )
+        .left
+        .map(_ =>
+          RepoError
+            .Rejected("Kategorie wird von Arbeitspaketen, Angeboten oder Favoriten verwendet")
+        )
+    yield List(
+      Stmt(Sql.upsertCategory, (p, c.value, cat.name.value, true)),
+      Stmt(Sql.deleteLeistungenOfCategory, (p, c.value))
+    )
+
+  private def stmtsAddLeistung(
+      p: String,
+      view: ProjectView,
+      c: CategoryId,
+      name: LeistungName,
+      fresh: String
+  ): Either[RepoError, List[Stmt[?]]] =
+    for
+      _ <- requireCategory(view, c)
+      l <- LeistungId.from(s"l-$fresh").left.map(RepoError.Invalid(_))
+    yield List(Stmt(Sql.insertLeistung, (p, l.value, c.value, name.value)))
+
+  private def stmtsMergeLeistung(
+      p: String,
+      view: ProjectView,
+      from: LeistungId,
+      into: LeistungId
+  ): Either[RepoError, List[Stmt[?]]] =
+    for
+      f <- requireLeistung(view, from)
+      t <- requireLeistung(view, into)
+      _ <- Either.cond(
+        f.id != t.id,
+        (),
+        RepoError.Rejected("Eine Leistung kann nicht mit sich selbst zusammengeführt werden")
+      )
+      _ <- Either.cond(
+        f.category == t.category,
+        (),
+        RepoError.Rejected("Leistungen gehören zu verschiedenen Kategorien")
+      )
+    yield
+      val moved = (p, from.value, into.value)
+      List(
+        Stmt(Sql.moveItems, moved),
+        Stmt(Sql.mergeReadCoverage, moved),
+        Stmt(Sql.moveCoverage, moved),
+        Stmt(Sql.deleteCoverageOf, (p, from.value)),
+        Stmt(Sql.deleteLeistung, (p, from.value))
+      )
+
+  private def stmtsAssignItem(
+      p: String,
+      view: ProjectView,
+      o: OfferId,
+      item: Int,
+      target: Option[LeistungId]
+  ): Either[RepoError, List[Stmt[?]]] =
+    for
+      (_, raw) <- requireUpload(view, o)
+      _ <- Either.cond(
+        raw.lineItems.indices.contains(item),
+        (),
+        RepoError.ItemNotFound(o, item)
+      )
+      // Cross-category grouping is allowed: a line item of an offer uploaded under one
+      // category may be assigned to a Leistung of another (manual scope grouping).
+      _ <- target.traverse(requireLeistung(view, _))
+    yield List(Stmt(Sql.upsertManualItem, (p, o.value, item, target.map(_.value))))
+
+  private def stmtsSetCoverage(
+      p: String,
+      view: ProjectView,
+      o: OfferId,
+      l: LeistungId,
+      coverage: Option[Coverage]
+  ): Either[RepoError, List[Stmt[?]]] =
+    for
+      _ <- requireUpload(view, o)
+      _ <- requireLeistung(view, l) // coverage may target a Leistung of another category
+    yield coverage match
+      case Some(c) =>
+        List(Stmt(Sql.upsertManualCoverage, (p, o.value, l.value, Coverage.code(c))))
+      case None => List(Stmt(Sql.deleteManualCoverage, (p, o.value, l.value)))
 
 /** Same firm + same recipient in the same category: replace identity via [[OfferReplaceKey]].
   * Missing recipients share [[RecipientKey.Unknown]] and only match other unknowns — they never
@@ -691,6 +774,7 @@ object UploadReplace:
     val keep = kept(view, upload)
     sameIdentity(view, upload.category, keyOf(upload.outcome)).filterNot(_.id == keep)
 
+/** Skunk-backed [[ProjectRepository]]: load/decode rows, migrations and statement helpers. */
 object PostgresProjectRepository:
   /** Version of the [[RawOffer]] JSON written to `uploads.extraction`. Version 2 added the optional
     * Leistung fields, so version 1 still decodes; other versions are not readable.

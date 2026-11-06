@@ -11,6 +11,7 @@ enum ApiError:
   case ProjectNotFound(projectId: String)
   case StorageFailed(code: String)
 
+/** Tapir error outputs for JSON API failures. */
 object ApiError:
   given Codec.AsObject[InvalidProjectId] = Codec.AsObject.derived
   given Codec.AsObject[ProjectNotFound] = Codec.AsObject.derived

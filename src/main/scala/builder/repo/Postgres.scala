@@ -18,6 +18,7 @@ import java.net.URI
 /** A Postgres SQLSTATE (five characters, e.g. `23503` for a foreign key violation). */
 opaque type SqlState = String
 
+/** Construction and access for [[SqlState]]. */
 object SqlState:
   def apply(code: String): SqlState = code
   extension (s: SqlState) def value: String = s
@@ -43,6 +44,7 @@ final case class DbConfig(
 ):
   override def toString: String = s"postgres://$user@$host:$port/$database"
 
+/** Reads [[DbConfig]] from environment variables. */
 object DbConfig:
   /** `DATABASE_URL` (`postgres://user:pass@host:port/db`) or `DATABASE_HOST`, `DATABASE_PORT`
     * (default 5432), `DATABASE_USER`, `DATABASE_PASSWORD`, `DATABASE_NAME`.
@@ -131,6 +133,7 @@ final class Postgres private (pool: Resource[IO, Session[IO]]):
       )
     )
 
+/** Skunk session pool, transaction helpers and schema migration runner. */
 object Postgres:
   given Tracer[IO] = Tracer.Implicits.noop
   given Meter[IO] = Meter.Implicits.noop

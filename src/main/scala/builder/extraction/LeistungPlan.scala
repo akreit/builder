@@ -19,6 +19,7 @@ final case class LeistungPlan(
     coverage: List[ReadCoverage]
 )
 
+/** Builds a [[LeistungPlan]] from extractor output and known Leistungen. */
 object LeistungPlan:
   /** At most this many new Leistungen are taken from one extraction; the rest are dropped. */
   val MaxNew: Int = 10

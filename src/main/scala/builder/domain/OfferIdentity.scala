@@ -8,6 +8,8 @@ import builder.extraction.RawOffer
   * recipient.
   */
 opaque type RecipientKey = String
+
+/** Construction and sentinel for [[RecipientKey]]. */
 object RecipientKey:
   /** Sentinel for missing recipient text. */
   val Unknown: RecipientKey = "\u0000unknown"

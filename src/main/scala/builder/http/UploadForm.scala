@@ -6,6 +6,7 @@ import sttp.tapir.*
 /** The multipart form of an upload: only the `datei` part is decoded, other parts are skipped. */
 final case class UploadForm(datei: Option[Part[Array[Byte]]])
 
+/** Multipart codecs for [[UploadForm]]. */
 object UploadForm:
   /** Tapir's raw multipart codec, restricted to the `datei` part (no default part type, so other
     * parts are not read into memory). Hand-written: the derived codec warns under -Werror.

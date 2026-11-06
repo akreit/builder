@@ -24,6 +24,8 @@ import scala.concurrent.duration.*
 
 /** API key for the Anthropic Messages API. Never rendered: `toString` hides the value. */
 opaque type ApiKey = String
+
+/** Construction of [[ApiKey]] from raw text or the environment. */
 object ApiKey:
   def from(raw: String): Option[ApiKey] = Some(raw.trim).filter(_.nonEmpty)
   def fromEnv: Option[ApiKey] = sys.env.lift("ANTHROPIC_API_KEY").flatMap(from)
@@ -50,6 +52,7 @@ final case class RetryPolicy(
       .betweenLong(0L, half + 1)
       .map(j => (half + j).millis.max(retryAfter.fold(Duration.Zero)(_.min(maxDelay))))
 
+/** Default [[RetryPolicy]] for Anthropic API calls. */
 object RetryPolicy:
   val default: RetryPolicy = RetryPolicy(
     maxRetries = 3,
@@ -134,6 +137,7 @@ final class ClaudeOfferExtractor(
           if isConnectionError(e) then Attempt.Retry(error, None) else Attempt.Done(Left(error))
       }
 
+/** Defaults and HTTP client wiring for the Claude Messages extractor. */
 object ClaudeOfferExtractor:
   val DefaultModel = "claude-sonnet-5-5"
   private val endpoint: Uri = uri"https://api.anthropic.com/v1/messages"

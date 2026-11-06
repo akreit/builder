@@ -1,5 +1,6 @@
 package builder.domain
 
+/** Supported project currencies and their minor-unit precision. */
 enum Currency(val code: String, val minorDigits: Int):
   case EUR extends Currency("EUR", 2)
   case CHF extends Currency("CHF", 2)
@@ -7,6 +8,7 @@ enum Currency(val code: String, val minorDigits: Int):
 /** Integral amount in the minor unit of a currency (e.g. cents). */
 opaque type MinorUnits = BigInt
 
+/** Construction and access for [[MinorUnits]]. */
 object MinorUnits:
   def apply(value: BigInt): MinorUnits = value
   extension (m: MinorUnits) def value: BigInt = m
@@ -33,6 +35,7 @@ final case class Money(minor: MinorUnits, currency: Currency):
   /** Plain decimal string with exactly the currency's minor digits, e.g. "1234.50". */
   def show: String = toDecimal.bigDecimal.toPlainString
 
+/** Factories and aggregation for [[Money]]. */
 object Money:
   def zero(currency: Currency): Money = Money(MinorUnits(BigInt(0)), currency)
 
@@ -51,6 +54,7 @@ object Money:
       acc.flatMap(_.plus(m))
     )
 
+/** Failures when combining or parsing money amounts. */
 enum MoneyError:
   case CurrencyMismatch(expected: Currency, actual: Currency)
   case TooPrecise(amount: BigDecimal, currency: Currency)

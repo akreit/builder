@@ -2,12 +2,16 @@ package builder.domain
 
 /** Id of a Leistung (a coarse work step of a category, e.g. "Gerüst" or "Neu decken"). */
 opaque type LeistungId = String
+
+/** Smart constructor for [[LeistungId]]. */
 object LeistungId:
   def from(raw: String): Either[DomainError, LeistungId] = validId("leistung", raw)
   extension (id: LeistungId) def value: String = id
 
 /** Display name of a Leistung, trimmed and non-empty. */
 opaque type LeistungName = String
+
+/** Smart constructor for [[LeistungName]]. */
 object LeistungName:
   def from(raw: String): Either[DomainError, LeistungName] =
     val trimmed = raw.trim
@@ -30,6 +34,7 @@ enum Coverage:
   case Ausgeschlossen
   case Unklar
 
+/** Wire codes for [[Coverage]] used in JSON, DB and forms. */
 object Coverage:
   /** Wire names used in the extractor JSON, the database and form values. */
   def code(c: Coverage): String = c match

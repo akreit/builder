@@ -24,6 +24,7 @@ trait OfferPass[F[_]]:
   /** Prompt text (instructions + category context) of a pass, used to size the document budget. */
   def promptText(known: List[Leistung]): String
 
+/** Factories for single-pass Claude [[OfferPass]] implementations. */
 object OfferPass:
   /** At most `permits` passes run at the same time across all uploads (the app uses 2). */
   def bounded(underlying: OfferPass[IO], permits: Int): IO[OfferPass[IO]] =

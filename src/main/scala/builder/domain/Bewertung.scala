@@ -2,6 +2,8 @@ package builder.domain
 
 /** Reference rating of a contractor: 1 to 5 stars. */
 opaque type Stars = Int
+
+/** Smart constructor for [[Stars]] (1–5). */
 object Stars:
   def from(n: Int): Either[DomainError, Stars] =
     Either.cond(n >= 1 && n <= 5, n, DomainError.InvalidStars(n))
@@ -9,6 +11,8 @@ object Stars:
 
 /** Contractors are identified by their name, case and surrounding spaces ignored. */
 opaque type ContractorKey = String
+
+/** Builds a normalised [[ContractorKey]] from a display name. */
 object ContractorKey:
   def of(name: String): Option[ContractorKey] =
     Option(name.trim.toLowerCase.replaceAll("\\s+", " ")).filter(_.nonEmpty)
@@ -17,6 +21,7 @@ object ContractorKey:
 /** What the user knows about a contractor's references. */
 final case class Rating(stars: Stars, note: String)
 
+/** Limits and helpers for [[Rating]]. */
 object Rating:
   /** Longest note kept with a rating. */
   val MaxNote: Int = 500
@@ -26,6 +31,7 @@ enum Criterion:
   case Preis
   case Referenzen
 
+/** Labels and wire codes for [[Criterion]]. */
 object Criterion:
   def label(c: Criterion): String = c match
     case Preis      => "Preis"
@@ -39,6 +45,8 @@ object Criterion:
 
 /** Relative weight of each criterion in percent points (0 to 100). */
 opaque type Weights = Map[Criterion, Int]
+
+/** Default and validated [[Weights]] maps for ranking criteria. */
 object Weights:
   val default: Weights = Map(Criterion.Preis -> 50, Criterion.Referenzen -> 50)
 

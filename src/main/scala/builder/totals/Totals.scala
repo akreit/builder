@@ -2,9 +2,11 @@ package builder.totals
 
 import builder.domain.*
 
+/** Why an offer was chosen as the counted one for a category. */
 enum CountedReason:
   case Favorite, OnlyOffer
 
+/** Per-category contribution to the running total (counted, empty or undecided). */
 enum CategoryStatus:
   case Counted(
       offerId: OfferId,
@@ -18,8 +20,10 @@ enum CategoryStatus:
   /** Several offers and no favorite: the user must decide; nothing is counted. */
   case NeedsDecision(candidates: List[OfferId])
 
+/** One category row in [[ProjectTotals]]. */
 final case class CategoryTotal(category: Category, status: CategoryStatus)
 
+/** Aggregated running total for a project across its categories. */
 final case class ProjectTotals(
     projectId: ProjectId,
     currency: Currency,
@@ -33,6 +37,7 @@ final case class ProjectTotals(
     categories.collect { case CategoryTotal(c, CategoryStatus.NeedsDecision(_)) => c }
   def isComplete: Boolean = missingCategories.isEmpty && undecidedCategories.isEmpty
 
+/** Pure total calculation from a validated [[Project]]. */
 object Totals:
 
   private def counted(o: Offer, r: CountedReason): CategoryStatus =

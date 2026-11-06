@@ -27,6 +27,7 @@ final case class PassBudget(
   /** Characters of document text that fit next to `prompt` (instructions + category context). */
   def documentChars(prompt: String): Int = (inputTokens - tokens(prompt)).max(1) * charsPerToken
 
+/** Default token/character budgets for multi-pass extraction. */
 object PassBudget:
   val default: PassBudget = PassBudget(
     contextTokens = 200000,

@@ -20,6 +20,7 @@ final case class Field(value: Option[String], page: Option[Int], confidence: Con
     case Confidence.Low                      => true
     case Confidence.Medium | Confidence.High => false
 
+/** Circe codecs for [[Field]] and [[Confidence]]. */
 object Field:
   private def wire(c: Confidence): String = c.toString.toLowerCase
 
@@ -29,6 +30,7 @@ object Field:
   )
   given Codec.AsObject[Field] = Codec.AsObject.derived
 
+/** One line item as returned by the extractor (fields still unvalidated). */
 final case class RawLineItem(
     description: Field,
     quantity: Field,

@@ -162,7 +162,6 @@ object LeistungenMatrix:
     val project = view.project
     val m = Matrix.build(view, category.id)
     val leistungen = m.rows.map(_.leistung)
-    // Assignment controls for offers uploaded to this category only; Ziel may be any category.
     val nativeColumns = m.columns.filter(_.upload.upload.category == category.id)
     tags2.section(cls := "leistungen", attr("data-kategorie") := category.id.value)(
       h3("Leistungsvergleich"),
@@ -173,114 +172,135 @@ object LeistungenMatrix:
         p(cls := "hinweis")(
           "Noch keine Leistungen – sie werden beim ersten hochgeladenen Angebot erkannt."
         )
-      else
-        table(cls := "matrix")(
-          thead(tr(th("Leistung"), m.columns.map(c => th(columnTitle(c))))),
-          tbody(
-            m.rows.map(r =>
-              tr(
-                leistungHeader(project, r.leistung, leistungen.filterNot(_.id == r.leistung.id)),
-                m.columns.zip(r.cells).map((col, c) => matrixCell(project, col, r.leistung, c))
-              )
-            ),
-            if m.unassigned.isEmpty then frag()
-            else
-              tr(cls := "nicht-zugeordnet")(
-                th("Nicht zugeordnet"),
-                m.columns.map(col =>
-                  td(
-                    m.unassigned
-                      .filter(_.offer == col.upload.upload.id)
-                      .map(u => div(cls := "pruefen")(s"Pos. ${u.item + 1}: ${u.description}"))
-                  )
-                )
-              )
-          ),
-          tfoot(
-            tr(cls := "summen")(
-              th("Summe Zellen + nicht zugeordnet"),
-              m.totals.map(t =>
-                td(
-                  cls := (if t.mismatch then "betrag pruefen" else "betrag"),
-                  attr("data-abweichung") := t.mismatch.toString
-                )(
-                  t.sum.map(Format.money).getOrElse("nicht lesbar"),
-                  div(cls := "hinweis")(
-                    s"Netto laut Angebot: ${t.net.map(Format.money).getOrElse("nicht lesbar")}"
-                  ),
-                  if t.mismatch then div("Weicht vom Netto ab – Zuordnung prüfen") else frag()
-                )
-              )
-            )
+      else matrixTable(project, m, leistungen),
+      droppedWarnings(m),
+      assignmentDetails(view, project, nativeColumns),
+      addLeistungForm(project, category),
+      addCategoryInComparison(project)
+    )
+
+  private def matrixTable(project: Project, m: Matrix, leistungen: List[Leistung]): Frag =
+    table(cls := "matrix")(
+      thead(tr(th("Leistung"), m.columns.map(c => th(columnTitle(c))))),
+      tbody(
+        m.rows.map(r =>
+          tr(
+            leistungHeader(project, r.leistung, leistungen.filterNot(_.id == r.leistung.id)),
+            m.columns.zip(r.cells).map((col, c) => matrixCell(project, col, r.leistung, c))
           )
+        ),
+        if m.unassigned.isEmpty then frag()
+        else unassignedRow(m)
+      ),
+      tfoot(totalsRow(m))
+    )
+
+  private def unassignedRow(m: Matrix): Frag =
+    tr(cls := "nicht-zugeordnet")(
+      th("Nicht zugeordnet"),
+      m.columns.map(col =>
+        td(
+          m.unassigned
+            .filter(_.offer == col.upload.upload.id)
+            .map(u => div(cls := "pruefen")(s"Pos. ${u.item + 1}: ${u.description}"))
         )
-      ,
+      )
+    )
+
+  private def totalsRow(m: Matrix): Frag =
+    tr(cls := "summen")(
+      th("Summe Zellen + nicht zugeordnet"),
+      m.totals.map(t =>
+        td(
+          cls := (if t.mismatch then "betrag pruefen" else "betrag"),
+          attr("data-abweichung") := t.mismatch.toString
+        )(
+          t.sum.map(Format.money).getOrElse("nicht lesbar"),
+          div(cls := "hinweis")(
+            s"Netto laut Angebot: ${t.net.map(Format.money).getOrElse("nicht lesbar")}"
+          ),
+          if t.mismatch then div("Weicht vom Netto ab – Zuordnung prüfen") else frag()
+        )
+      )
+    )
+
+  private def droppedWarnings(m: Matrix): Frag =
+    frag(
       m.columns.zip(m.dropped).collect {
         case (col, n) if n > 0 =>
           p(cls := "pruefen verworfen")(
             s"${columnTitle(col)}: $n weitere Leistungsvorschläge verworfen " +
               s"(höchstens ${LeistungPlan.MaxNew} neue je Angebot)."
           )
-      },
-      if nativeColumns.isEmpty then frag()
-      else
-        tag("details")(cls := "zuordnung")(
-          tag("summary")("Positionen zuordnen"),
-          p(cls := "hinweis")(
-            "Ziel-Leistung darf aus jeder Kategorie kommen (manuelle Gruppenbildung)."
-          ),
-          nativeColumns.map { col =>
-            val assigned = Matrix.effective(view.assignments)
-            div(
-              h4(columnTitle(col)),
-              table(
-                col.raw.lineItems.zipWithIndex.map((li, i) =>
-                  val current = assigned.get((col.upload.upload.id, i)).flatten
-                  tr(
-                    td(s"${i + 1}. ${li.description.value.getOrElse("")}"),
-                    td(cls := "betrag")(li.total.value.getOrElse("")),
-                    td(
-                      editForm(
-                        project,
-                        List(
-                          "aktion" -> "position-zuordnen",
-                          "angebot" -> col.upload.upload.id.value,
-                          "position" -> (i + 1).toString
-                        ),
-                        auto = true
-                      )(
-                        select(
-                          name := "ziel",
-                          attr("aria-label") := s"Leistung für Position ${i + 1}"
-                        )(zielOptions(view, current))
-                      )
-                    )
-                  )
-                )
+      }*
+    )
+
+  private def assignmentDetails(
+      view: ProjectView,
+      project: Project,
+      nativeColumns: List[MatrixColumn]
+  ): Frag =
+    if nativeColumns.isEmpty then frag()
+    else
+      tag("details")(cls := "zuordnung")(
+        tag("summary")("Positionen zuordnen"),
+        p(cls := "hinweis")(
+          "Ziel-Leistung darf aus jeder Kategorie kommen (manuelle Gruppenbildung)."
+        ),
+        nativeColumns.map(col => assignmentColumn(view, project, col))
+      )
+
+  private def assignmentColumn(view: ProjectView, project: Project, col: MatrixColumn): Frag =
+    val assigned = Matrix.effective(view.assignments)
+    div(
+      h4(columnTitle(col)),
+      table(
+        col.raw.lineItems.zipWithIndex.map((li, i) =>
+          val current = assigned.get((col.upload.upload.id, i)).flatten
+          tr(
+            td(s"${i + 1}. ${li.description.value.getOrElse("")}"),
+            td(cls := "betrag")(li.total.value.getOrElse("")),
+            td(
+              editForm(
+                project,
+                List(
+                  "aktion" -> "position-zuordnen",
+                  "angebot" -> col.upload.upload.id.value,
+                  "position" -> (i + 1).toString
+                ),
+                auto = true
+              )(
+                select(
+                  name := "ziel",
+                  attr("aria-label") := s"Leistung für Position ${i + 1}"
+                )(zielOptions(view, current))
               )
             )
-          }
+          )
         )
-      ,
-      editForm(
-        project,
-        List("aktion" -> "leistung-neu", "kategorie" -> category.id.value),
-        auto = false
-      )(
-        input(
-          name := "name",
-          placeholder := "Neue Leistung",
-          attr("aria-label") := "Neue Leistung"
-        ),
-        button(tpe := "submit")("Leistung hinzufügen")
-      ),
-      // Manual category creation inside the comparison view (owner: group lines across categories).
-      editForm(project, List("aktion" -> "kategorie-neu"), auto = false)(
-        input(
-          name := "name",
-          placeholder := "Neue Kategorie",
-          attr("aria-label") := "Neue Kategorie im Vergleich"
-        ),
-        button(tpe := "submit")("Kategorie hinzufügen")
       )
+    )
+
+  private def addLeistungForm(project: Project, category: Category): Frag =
+    editForm(
+      project,
+      List("aktion" -> "leistung-neu", "kategorie" -> category.id.value),
+      auto = false
+    )(
+      input(
+        name := "name",
+        placeholder := "Neue Leistung",
+        attr("aria-label") := "Neue Leistung"
+      ),
+      button(tpe := "submit")("Leistung hinzufügen")
+    )
+
+  private def addCategoryInComparison(project: Project): Frag =
+    editForm(project, List("aktion" -> "kategorie-neu"), auto = false)(
+      input(
+        name := "name",
+        placeholder := "Neue Kategorie",
+        attr("aria-label") := "Neue Kategorie im Vergleich"
+      ),
+      button(tpe := "submit")("Kategorie hinzufügen")
     )

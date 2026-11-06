@@ -32,6 +32,7 @@ final case class TotalsResponse(
 ) derives Codec.AsObject,
       Schema
 
+/** JSON encoding helpers for [[TotalsResponse]]. */
 object TotalsResponse:
   /** Maps domain totals into the JSON DTO (German UI strings stay in HTML endpoints). */
   def from(t: ProjectTotals): TotalsResponse =

@@ -14,6 +14,7 @@ enum OfferFileType(val mediaType: String, val extension: String, val maxMegabyte
 
   def maxBytes: Int = maxMegabytes * 1024 * 1024
 
+/** Magic-byte detection and extension lookup for [[OfferFileType]]. */
 object OfferFileType:
   private val magic: List[(OfferFileType, List[Int])] = List(
     Pdf -> List(0x25, 0x50, 0x44, 0x46), // %PDF
@@ -59,6 +60,7 @@ trait OfferExtractor[F[_]]:
       known: List[Leistung]
   ): F[Either[ExtractionError, RawOffer]]
 
+/** Concurrency wrappers around an [[OfferExtractor]]. */
 object OfferExtractor:
   /** At most `permits` extractions run at the same time; further callers wait for a slot. */
   def bounded(underlying: OfferExtractor[IO], permits: Int): IO[OfferExtractor[IO]] =

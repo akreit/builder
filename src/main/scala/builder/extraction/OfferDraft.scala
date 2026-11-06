@@ -15,6 +15,7 @@ enum Issue:
 
 /** Validates a [[RawOffer]] with the domain smart constructors, collecting every problem. */
 object OfferDraft:
+  /** Validation result that accumulates every [[Issue]] instead of stopping at the first. */
   type Checked[A] = Either[NonEmptyList[Issue], A]
 
   private def extracted[A](f: Field, a: A): Extracted[A] = Extracted(a, f.pageNumber, f.confidence)

@@ -45,55 +45,54 @@ object ProjectFragment:
         ),
         button(tpe := "submit")("Kategorie hinzufügen")
       ),
-      // Aggregate scope summary: categories + totals only — no line-item dump (assignment stays in
-      // Leistungsvergleich). Visually mirrors the comparison table layout.
-      tags2.section(cls := "leistungsverzeichnis", id := "leistungsverzeichnis")(
-        h2("Leistungsverzeichnis"),
-        table(
-          thead(
-            tr(
-              th("Kategorie"),
-              th("Leistungen"),
-              th("Angebote"),
-              th(cls := "betrag")("Netto"),
-              th("Status")
-            )
-          ),
-          tbody(
-            totals.categories.map { ct =>
-              val leistungCount =
-                view.leistungen.count(_.category == ct.category.id)
-              val offerCount = view.project.offers.count(_.category == ct.category.id)
-              val (net, statusLabel) = ct.status match
-                case CategoryStatus.Counted(_, _, net, _, _) =>
-                  (Format.money(net), "gezählt")
-                case CategoryStatus.NeedsDecision(_) =>
-                  ("–", "Entscheidung offen")
-                case CategoryStatus.NoOffer =>
-                  ("–", "kein Angebot")
-              tr(
-                attr("data-verzeichnis-kategorie") := ct.category.id.value
-              )(
-                td(ct.category.name.value),
-                td(leistungCount.toString),
-                td(offerCount.toString),
-                td(cls := "betrag")(net),
-                td(statusLabel)
-              )
-            }
+      leistungsverzeichnis(view, totals),
+      projectSumme(totals)
+    )
+
+  /** Aggregate scope summary: categories and totals only — no line-item dump. */
+  private def leistungsverzeichnis(view: ProjectView, totals: ProjectTotals): Frag =
+    tags2.section(cls := "leistungsverzeichnis", id := "leistungsverzeichnis")(
+      h2("Leistungsverzeichnis"),
+      table(
+        thead(
+          tr(
+            th("Kategorie"),
+            th("Leistungen"),
+            th("Angebote"),
+            th(cls := "betrag")("Netto"),
+            th("Status")
           )
-        )
-      ),
-      tags2.section(cls := "summe", id := "summe")(
-        h2("Gesamtsumme Projekt"),
-        table(
-          tr(th("Gesamtsumme netto"), td(cls := "betrag")(Format.money(totals.net))),
-          tr(th("Gesamtsumme brutto"), td(cls := "betrag")(Format.money(totals.gross)))
         ),
-        if totals.isComplete then p("Alle Kategorien sind entschieden.")
-        else
-          p(cls := "hinweis")(
-            "Vorläufige Summe: Kategorien mit offener Entscheidung oder ohne Angebot sind nicht enthalten."
-          )
+        tbody(totals.categories.map(ct => verzeichnisRow(view, ct)))
       )
+    )
+
+  private def verzeichnisRow(view: ProjectView, ct: CategoryTotal): Frag =
+    val leistungCount = view.leistungen.count(_.category == ct.category.id)
+    val offerCount = view.project.offers.count(_.category == ct.category.id)
+    val (net, statusLabel) = ct.status match
+      case CategoryStatus.Counted(_, _, net, _, _) => (Format.money(net), "gezählt")
+      case CategoryStatus.NeedsDecision(_)         => ("–", "Entscheidung offen")
+      case CategoryStatus.NoOffer                  => ("–", "kein Angebot")
+    tr(attr("data-verzeichnis-kategorie") := ct.category.id.value)(
+      td(ct.category.name.value),
+      td(leistungCount.toString),
+      td(offerCount.toString),
+      td(cls := "betrag")(net),
+      td(statusLabel)
+    )
+
+  /** Project-wide net/gross sum and completeness hint. */
+  private def projectSumme(totals: ProjectTotals): Frag =
+    tags2.section(cls := "summe", id := "summe")(
+      h2("Gesamtsumme Projekt"),
+      table(
+        tr(th("Gesamtsumme netto"), td(cls := "betrag")(Format.money(totals.net))),
+        tr(th("Gesamtsumme brutto"), td(cls := "betrag")(Format.money(totals.gross)))
+      ),
+      if totals.isComplete then p("Alle Kategorien sind entschieden.")
+      else
+        p(cls := "hinweis")(
+          "Vorläufige Summe: Kategorien mit offener Entscheidung oder ohne Angebot sind nicht enthalten."
+        )
     )

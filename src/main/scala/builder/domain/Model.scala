@@ -8,18 +8,26 @@ private val IdPattern = "[A-Za-z0-9][A-Za-z0-9_-]{0,63}".r
 private def validId(kind: String, raw: String): Either[DomainError, String] =
   Either.cond(IdPattern.matches(raw), raw, DomainError.InvalidId(kind, raw))
 
+/** Stable id of a renovation project. */
 opaque type ProjectId = String
+
+/** Smart constructor for [[ProjectId]]. */
 object ProjectId:
   def from(raw: String): Either[DomainError, ProjectId] = validId("project", raw)
   extension (id: ProjectId) def value: String = id
 
+/** Stable id of an uploaded offer within a project. */
 opaque type OfferId = String
+
+/** Smart constructor for [[OfferId]]. */
 object OfferId:
   def from(raw: String): Either[DomainError, OfferId] = validId("offer", raw)
   extension (id: OfferId) def value: String = id
 
 /** VAT rate in percent, e.g. 19 or 7. */
 opaque type VatRate = BigDecimal
+
+/** Smart constructor and VAT calculation for [[VatRate]]. */
 object VatRate:
   def from(percent: BigDecimal): Either[DomainError, VatRate] =
     Either.cond(percent >= 0 && percent <= 100, percent, DomainError.InvalidVatRate(percent))
@@ -37,11 +45,14 @@ object VatRate:
 
 /** Strictly positive quantity of a line item. */
 opaque type Quantity = BigDecimal
+
+/** Smart constructor for positive [[Quantity]]. */
 object Quantity:
   def from(value: BigDecimal): Either[DomainError, Quantity] =
     Either.cond(value > 0, value, DomainError.InvalidQuantity(value))
   extension (q: Quantity) def value: BigDecimal = q
 
+/** Safe calendar dates at the Java `LocalDate` boundary. */
 object Dates:
   /** `LocalDate.of` fails on invalid input; keep that at the Java boundary. */
   def of(year: Int, month: Int, day: Int): Either[DomainError, LocalDate] =
@@ -49,13 +60,18 @@ object Dates:
       DomainError.InvalidDate(year, month, day)
     )
 
+/** Stable id of a project category (trade). */
 opaque type CategoryId = String
+
+/** Smart constructor for [[CategoryId]]. */
 object CategoryId:
   def from(raw: String): Either[DomainError, CategoryId] = validId("category", raw)
   extension (id: CategoryId) def value: String = id
 
 /** Human-readable category name, trimmed and non-empty (e.g. "Dämmung"). */
 opaque type CategoryName = String
+
+/** Smart constructor for non-empty [[CategoryName]]. */
 object CategoryName:
   def from(raw: String): Either[DomainError, CategoryName] =
     val trimmed = raw.trim
@@ -65,8 +81,10 @@ object CategoryName:
 /** A project-specific category (trade) that offers, favorites and work packages belong to. */
 final case class Category(id: CategoryId, name: CategoryName)
 
+/** Planned work within a category (description and areas), not an offer. */
 final case class WorkPackage(category: CategoryId, description: String, areas: List[String])
 
+/** Contractor firm name as shown on an offer. */
 final case class Contractor(name: String)
 
 /** Quantity of a line item: known from the document, or missing (offer may still be accepted). */
@@ -98,6 +116,7 @@ final case class LineItem private (
     total: PriceInfo
 )
 
+/** Validated construction of [[LineItem]] (price × quantity rules). */
 object LineItem:
   def from(
       description: Extracted[String],
@@ -191,6 +210,7 @@ final case class Offer private (
         List(li.unitPrice, li.total).collect { case PriceInfo.Known(e) => e.value }
       )
 
+/** Validated construction of [[Offer]] (gross/VAT/line-sum rules). */
 object Offer:
   private def nonNegative(field: String, m: Money): Either[DomainError, Money] =
     Either.cond(!m.isNegative, m, DomainError.NegativeAmount(field, m))
@@ -286,6 +306,7 @@ final case class Project private (
       favorites + (category -> offer)
     )
 
+/** Validated construction of [[Project]] (ids, refs, currency, favorites). */
 object Project:
   private def firstDuplicate[A](values: List[A]): Option[A] =
     values.groupBy(identity).collectFirst { case (a, as) if as.sizeIs > 1 => a }

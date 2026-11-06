@@ -106,6 +106,7 @@ final class FileStore(dir: Path):
   def deleteAll(id: OfferId): IO[Unit] =
     OfferFileType.values.toList.traverse_(ft => delete(id, ft))
 
+/** Path layout and factory for the on-disk [[FileStore]]. */
 object FileStore:
   /** An existing live file moved aside by [[FileStore.install]]. */
   final case class Backup(backup: Path, live: Path)
