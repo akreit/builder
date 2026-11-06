@@ -71,7 +71,8 @@ class ApiSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
       (status, body, ct) =>
         status shouldBe Status.Ok
         ct shouldBe Some("text/html")
-        body should include("Projekt: Dach")
+        body should include("Projekt Sanierung")
+        body should include(">Fassadendämmung<")
         body should include("Gesamtsumme")
         body should include("21.118,50 €")
         body should include("Entscheidung offen")

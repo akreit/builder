@@ -97,7 +97,7 @@ Sources live in `docs/`. The output goes to `target/docs/`.
 ## Layout (`src/main/scala/builder`)
 
 - `Main.scala`: Ember server entry point
-- `src/test/scala/builder/SampleData.scala`: test-only fixtures; runtime startup creates no projects, categories, offers or Leistungen.
+- `src/test/scala/builder/SampleData.scala`: test-only fixtures; runtime starts with an empty default project.
 - `domain/`: model, money, extracted offer data, errors
 - `totals/`: running-total calculation
 - `repo/`: project repository (Postgres via Skunk, versioned migrations)

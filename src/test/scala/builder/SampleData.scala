@@ -3,7 +3,7 @@ package builder
 import builder.domain.*
 import cats.syntax.all.*
 
-/** Demo project "Dach" served by the in-memory repository.
+/** Demo project "Sanierung" served by the in-memory repository.
   *
   * SAMPLE DATA: all contractor names ("Musterzimmerei …"), offers and amounts are fictional.
   */
@@ -152,7 +152,7 @@ object SampleData:
       e1 <- offer("elektrik-a", "Elektro Beispiel & Söhne", elektrik.id, 22, Nil, 480_000)
       p <- Project.from(
         id = id,
-        name = "Dach",
+        name = "Sanierung",
         currency = eur,
         categories = cats,
         workPackages = List(
