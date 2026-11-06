@@ -12,9 +12,11 @@ import scalatags.Text.tags2
 
 /** Uploaded offers (extraction results) and the upload form. */
 object Uploads:
+  /** htmx POST URL that deletes an upload by id. */
   private[ui] def deleteUrl(project: Project, category: Category, offerId: OfferId): String =
     s"/ui/projects/${project.id.value}/categories/${category.id.value}/angebote/${offerId.value}/loeschen"
 
+  /** Delete control for one upload. */
   private[ui] def deleteButton(project: Project, category: Category, upload: Upload): Frag =
     button(
       hxPost := deleteUrl(project, category, upload.id),
@@ -23,6 +25,7 @@ object Uploads:
       hxConfirm := s"Hochgeladenes Angebot „${upload.fileName}“ wirklich löschen?"
     )("Löschen")
 
+  /** Rendered block for one upload (status, detail, warnings, delete). */
   private[ui] def uploadBlock(
       u: UploadView,
       cur: Currency,
@@ -75,6 +78,7 @@ object Uploads:
         // Accepted offers cannot carry a mismatch (Offer.from rejects it); keep exhaustiveness.
         s"Ausgelesen und geprüft: $amountsOk. Positionssumme ${Format.money(sum)} ≠ Netto ${Format.money(net)}."
 
+  /** Open details listing low-confidence extracted fields. */
   private[ui] def lowConfidenceWarning(raw: RawOffer): Frag =
     raw.lowConfidenceFields match
       case Nil    => frag()
@@ -85,6 +89,8 @@ object Uploads:
           ),
           ul(fields.map(li(_)))
         )
+
+  /** Multipart upload form for a category (PDF/JPEG/PNG). */
   private[ui] def uploadForm(project: Project, category: Category): Frag =
     val indicator = s"lade-${category.id.value}"
     form(

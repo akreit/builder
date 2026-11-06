@@ -45,12 +45,15 @@ final case class Ranking(
 
 /** Builds a category ranking from the Leistungen matrix, firm ratings and criterion weights. */
 object Ranking:
+  /** Rounds score points to one decimal place (HALF_UP). */
   private def round(d: BigDecimal): BigDecimal = d.setScale(1, RoundingMode.HALF_UP)
 
+  /** True when the cell counts as covered for the shared-Leistungen set. */
   private def included(c: Cell): Boolean = c.coverage match
     case Coverage.Enthalten                                                  => c.price.isDefined
     case Coverage.NichtEnthalten | Coverage.Ausgeschlossen | Coverage.Unklar => false
 
+  /** Sums amounts in `cur`, or `None` on currency failure. */
   private def sum(ms: List[Money], cur: Currency): Option[Money] = Money.sum(cur, ms).toOption
 
   /** Display name: the recognised contractor, else the file name. */
@@ -64,10 +67,12 @@ object Ranking:
 
   val NotComparable: String = "Abweichungen – nicht vergleichbar"
 
+  /** True for uploads whose extraction was accepted into the project. */
   private def accepted(c: MatrixColumn): Boolean = c.upload.status match
     case UploadStatus.Accepted(_, _)                                    => true
     case UploadStatus.Rejected(_, _) | UploadStatus.ExtractionFailed(_) => false
 
+  /** Builds a scored criterion result with detail text. */
   private def score(points: BigDecimal, detail: String) = CriterionResult.Scored(points, detail)
 
   /** Cells of accepted columns only, per Leistung, in the order of `good`. */
@@ -106,6 +111,7 @@ object Ranking:
     }
     PriceBasis(comparable, missing)
 
+  /** Contractor key and stored rating for a column, if the firm was recognised. */
   private def rated(
       col: MatrixColumn,
       ratings: Map[ContractorKey, Rating]

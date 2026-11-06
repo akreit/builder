@@ -120,6 +120,7 @@ enum Edit:
 /** Persistence API for projects: load, favorites, uploads, deletes and manual edits. */
 trait ProjectRepository:
 
+  /** Loads the full project view (trait contract). */
   def find(id: ProjectId): IO[Either[RepoError, ProjectView]]
 
   /** Marks `offer` as the favorite of `category` and returns the updated project. */
@@ -213,24 +214,31 @@ final class PostgresProjectRepository private (
 ) extends ProjectRepository:
   import PostgresProjectRepository.*
 
+  /** All upload rows for the project. */
   private def loadRows(id: ProjectId): IO[Either[RepoError, List[UploadRow]]] =
     db.query(Sql.uploads, id.value)
 
+  /** Category rows (including soft-deleted) for the project. */
   private def loadCategories(id: ProjectId): IO[Either[RepoError, List[CategoryRow]]] =
     db.query(Sql.categories, id.value)
 
+  /** Leistung rows for the project. */
   private def loadLeistungen(id: ProjectId): IO[Either[RepoError, List[LeistungRow]]] =
     db.query(Sql.leistungen, id.value)
 
+  /** Item→Leistung assignment rows for the project. */
   private def loadAssignments(id: ProjectId): IO[Either[RepoError, List[AssignmentRow]]] =
     db.query(Sql.assignments, id.value)
 
+  /** Coverage rows for the project. */
   private def loadCoverage(id: ProjectId): IO[Either[RepoError, List[CoverageRow]]] =
     db.query(Sql.coverage, id.value)
 
+  /** Favorite (category, offer) pairs for the project. */
   private def loadFavorites(id: ProjectId): IO[Either[RepoError, List[(String, String)]]] =
     db.query(Sql.favorites, id.value)
 
+  /** Derives [[UploadStatus]] by validating a stored extraction against the project. */
   private def status(project: Project, u: Upload): UploadStatus = u.outcome match
     case UploadOutcome.Failed(m) => UploadStatus.ExtractionFailed(m)
     case UploadOutcome.Read(raw) =>
@@ -268,6 +276,7 @@ final class PostgresProjectRepository private (
       Weights.default
     )
 
+  /** Folds decoded uploads into the seed project and upload views. */
   private def foldUploads(
       seed: Project,
       uploads: List[Upload]
@@ -299,6 +308,7 @@ final class PostgresProjectRepository private (
           )
     }
 
+  /** Loads and enriches the project view without taking the mutex (caller holds it). */
   private def load(id: ProjectId): IO[Either[RepoError, ProjectView]] =
     projects.lift(id) match
       case None       => IO.pure(Left(RepoError.ProjectNotFound(id)))
@@ -356,8 +366,10 @@ final class PostgresProjectRepository private (
         .getOrElse(Weights.default)
     )
 
+  /** Loads the project view under the repository mutex. */
   def find(id: ProjectId): IO[Either[RepoError, ProjectView]] = lock.lock.surround(load(id))
 
+  /** Sets the category favorite and reloads the view under the lock. */
   def setFavorite(
       id: ProjectId,
       category: CategoryId,
@@ -381,6 +393,7 @@ final class PostgresProjectRepository private (
       }
     )
 
+  /** Deletes the offer row then runs `cleanup` still under the lock; reloads the view. */
   def deleteOffer(
       id: ProjectId,
       category: CategoryId,
@@ -410,6 +423,7 @@ final class PostgresProjectRepository private (
       }
     )
 
+  /** Inserts/replaces an upload under the lock, running `prepare` for the file step. */
   def addUpload(
       id: ProjectId,
       upload: Upload,
@@ -482,6 +496,7 @@ final class PostgresProjectRepository private (
         List(Stmt(Sql.upsertFavorite, (id.value, category.value, keep.value)))
       case _ => Nil
 
+  /** SQL statements that upsert the upload row and clear obsolete same-identity offers. */
   private def uploadStatements(
       id: ProjectId,
       upload: Upload,
@@ -513,12 +528,14 @@ final class PostgresProjectRepository private (
         Stmt(Sql.insertUpload, row)
       )
 
+  /** Allocates `n` fresh Leistung ids with the given prefix. */
   private def freshIds(prefix: String, n: Int): IO[List[LeistungId]] =
     List
       .fill(n)(IO(java.util.UUID.randomUUID().toString.replace("-", "").take(10)))
       .sequence
       .map(_.flatMap(h => LeistungId.from(s"$prefix-$h").toOption))
 
+  /** SQL statements that persist a [[LeistungPlan]] (new Leistungen, assignments, coverage). */
   private def planStatements(
       id: ProjectId,
       offer: OfferId,
@@ -543,6 +560,7 @@ final class PostgresProjectRepository private (
       )
     )
 
+  /** Applies a manual [[Edit]] in a transaction under the lock and reloads. */
   def edit(id: ProjectId, e: Edit): IO[Either[RepoError, ProjectView]] =
     lock.lock.surround(
       (for
@@ -594,9 +612,11 @@ final class PostgresProjectRepository private (
         )
       case Edit.SetCoverage(o, l, coverage) => stmtsSetCoverage(p, view, o, l, coverage)
 
+  /** Resolves a category id on the view, or [[RepoError.CategoryNotFound]]. */
   private def requireCategory(view: ProjectView, c: CategoryId): Either[RepoError, Category] =
     view.project.categories.find(_.id == c).toRight(RepoError.CategoryNotFound(c))
 
+  /** Resolves a Leistung id on the view, or [[RepoError.LeistungNotFound]]. */
   private def requireLeistung(view: ProjectView, l: LeistungId): Either[RepoError, Leistung] =
     view.leistungen.find(_.id == l).toRight(RepoError.LeistungNotFound(l))
 
@@ -612,6 +632,7 @@ final class PostgresProjectRepository private (
       )
       .toRight(RepoError.OfferNotFound(o))
 
+  /** Statements to insert a new category with a fresh id. */
   private def stmtsAddCategory(
       p: String,
       name: CategoryName,
@@ -623,6 +644,7 @@ final class PostgresProjectRepository private (
       .map(RepoError.Invalid(_))
       .map(c => List(Stmt(Sql.upsertCategory, (p, c.value, name.value, false))))
 
+  /** Statements to soft-delete a category and drop its Leistungen (guards: no uploads/refs). */
   private def stmtsDeleteCategory(
       p: String,
       view: ProjectView,
@@ -656,6 +678,7 @@ final class PostgresProjectRepository private (
       Stmt(Sql.deleteLeistungenOfCategory, (p, c.value))
     )
 
+  /** Statements to insert a new Leistung under a category. */
   private def stmtsAddLeistung(
       p: String,
       view: ProjectView,
@@ -668,6 +691,8 @@ final class PostgresProjectRepository private (
       l <- LeistungId.from(s"l-$fresh").left.map(RepoError.Invalid(_))
     yield List(Stmt(Sql.insertLeistung, (p, l.value, c.value, name.value)))
 
+  /** Statements to merge two Leistungen of the same category (move items/coverage, delete source).
+    */
   private def stmtsMergeLeistung(
       p: String,
       view: ProjectView,
@@ -697,6 +722,7 @@ final class PostgresProjectRepository private (
         Stmt(Sql.deleteLeistung, (p, from.value))
       )
 
+  /** Statements for a manual item assignment (cross-category targets allowed). */
   private def stmtsAssignItem(
       p: String,
       view: ProjectView,
@@ -716,6 +742,7 @@ final class PostgresProjectRepository private (
       _ <- target.traverse(requireLeistung(view, _))
     yield List(Stmt(Sql.upsertManualItem, (p, o.value, item, target.map(_.value))))
 
+  /** Statements to set or clear manual coverage for an offer/Leistung pair. */
   private def stmtsSetCoverage(
       p: String,
       view: ProjectView,
@@ -736,15 +763,18 @@ final class PostgresProjectRepository private (
   * overwrite a known recipient.
   */
 object UploadReplace:
+  /** Replace key from a raw extraction (firm + recipient), if the firm is recognised. */
   def keyOf(raw: RawOffer): Option[OfferReplaceKey] =
     raw.contractor.text
       .flatMap(ContractorKey.of)
       .map(firm => OfferReplaceKey(firm, RecipientKey.fromField(raw.recipient)))
 
+  /** Replace key from an upload outcome. */
   def keyOf(outcome: UploadOutcome): Option[OfferReplaceKey] = outcome match
     case UploadOutcome.Read(raw) => keyOf(raw)
     case UploadOutcome.Failed(_) => None
 
+  /** Replace key from a derived upload status. */
   def keyOf(status: UploadStatus): Option[OfferReplaceKey] = status match
     case UploadStatus.Accepted(raw, _)    => keyOf(raw)
     case UploadStatus.Rejected(raw, _)    => keyOf(raw)
@@ -817,12 +847,14 @@ object PostgresProjectRepository:
       case Left(_)  =>
         (seed, List("Gespeicherte Änderungen an Kategorien sind ungültig und werden ignoriert"))
 
+  /** Decodes an assignment row; invalid ids are dropped. */
   private def toAssignment(r: AssignmentRow): Option[ItemAssignment] =
     for
       o <- OfferId.from(r.offer).toOption
       l <- r.leistung.traverse(LeistungId.from).toOption
     yield ItemAssignment(o, r.item, l, r.manual)
 
+  /** Decodes a coverage row; invalid ids/status are dropped. */
   private def toCoverage(r: CoverageRow): Option[CoverageEntry] =
     for
       o <- OfferId.from(r.offer).toOption
@@ -929,6 +961,7 @@ object PostgresProjectRepository:
   /** Arbitrary constant for `pg_advisory_xact_lock`, so parallel starts migrate one at a time. */
   private val MigrationLock = 4711_2026L
 
+  /** Applies pending schema migrations under an advisory transaction lock. */
   private def migrate(db: Postgres): IO[Either[RepoError, Unit]] =
     migrations
       .traverse_((version, statements) => EitherT(db.migration(MigrationLock, version, statements)))

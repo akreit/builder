@@ -5,6 +5,7 @@ opaque type Stars = Int
 
 /** Smart constructor for [[Stars]] (1–5). */
 object Stars:
+  /** Smart constructor: only values 1–5 are accepted. */
   def from(n: Int): Either[DomainError, Stars] =
     Either.cond(n >= 1 && n <= 5, n, DomainError.InvalidStars(n))
   extension (s: Stars) def value: Int = s
@@ -14,6 +15,7 @@ opaque type ContractorKey = String
 
 /** Builds a normalised [[ContractorKey]] from a display name. */
 object ContractorKey:
+  /** Builds a key from a display name (trim, lower case, collapse spaces); blank → `None`. */
   def of(name: String): Option[ContractorKey] =
     Option(name.trim.toLowerCase.replaceAll("\\s+", " ")).filter(_.nonEmpty)
   extension (k: ContractorKey) def value: String = k
@@ -33,14 +35,17 @@ enum Criterion:
 
 /** Labels and wire codes for [[Criterion]]. */
 object Criterion:
+  /** German label shown in the ranking UI. */
   def label(c: Criterion): String = c match
     case Preis      => "Preis"
     case Referenzen => "Referenzen"
 
+  /** Stable code used in forms and the `weights` table. */
   def code(c: Criterion): String = c match
     case Preis      => "preis"
     case Referenzen => "referenzen"
 
+  /** Inverse of [[code]]; unknown strings yield `None`. */
   def fromCode(s: String): Option[Criterion] = values.find(code(_) == s)
 
 /** Relative weight of each criterion in percent points (0 to 100). */

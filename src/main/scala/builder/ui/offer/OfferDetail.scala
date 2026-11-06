@@ -13,9 +13,11 @@ import scala.util.Try
   * Positionsliste wird in Matrix-Zellen des Leistungsvergleichs wiederverwendet.
   */
 object OfferDetail:
+  /** Page reference fragment for a field, when a page is known. */
   private def pageRef(f: Field): Frag =
     span(cls := "seite")(f.pageNumber.fold("–")(n => s"S. ${n.value}"))
 
+  /** Confidence flag marker for uncertain fields. */
   private def flag(f: Field): Frag = f.confidence match
     case Confidence.Low =>
       span(cls := "flag niedrig", title := "Geringe Sicherheit – bitte im Original prüfen")(
@@ -39,6 +41,7 @@ object OfferDetail:
       else t
     )
 
+  /** CSS modifier marking low-confidence fields. */
   private def unsureClass(f: Field): Modifier =
     if f.isLowConfidence then cls := "unsicher" else frag()
 
@@ -94,6 +97,7 @@ object OfferDetail:
       )
     )
 
+  /** Titled list of text fields (notes or exclusions). */
   private def textList(title: String, items: List[Field]): Frag =
     items.filter(_.text.nonEmpty) match
       case Nil            => frag()

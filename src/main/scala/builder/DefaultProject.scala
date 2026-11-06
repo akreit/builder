@@ -25,9 +25,11 @@ object DefaultProject:
     "innenausbau" -> "Innenausbau"
   )
 
+  /** Display name from `BUILDER_PROJECT_NAME`, or [[FallbackName]] when missing or blank. */
   def nameFromEnv(env: Map[String, String]): String =
     env.get(NameEnv).map(_.trim).filter(_.nonEmpty).getOrElse(FallbackName)
 
+  /** Structural trade categories of the empty home-project shell, in tab order. */
   def categories: Either[DomainError, List[Category]] =
     StructuralCategories.traverse((id, name) =>
       (CategoryId.from(id), CategoryName.from(name)).mapN(Category.apply)

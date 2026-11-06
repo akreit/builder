@@ -4,6 +4,7 @@ import scalatags.Text.all.*
 
 /** Status badge and status class of a category. */
 object Status:
+  /** Text badge describing whether the category is counted, empty or undecided. */
   private[ui] def statusBadge(s: CategoryStatus): Frag = s match
     case CategoryStatus.Counted(_, _, _, _, CountedReason.Favorite) =>
       span(cls := "status gezaehlt")("gezählt (Favorit)")
@@ -11,6 +12,8 @@ object Status:
       span(cls := "status gezaehlt")("gezählt (einziges Angebot)")
     case CategoryStatus.NeedsDecision(_) => span(cls := "status offen")("Entscheidung offen")
     case CategoryStatus.NoOffer          => span(cls := "status fehlt")("kein Angebot")
+
+  /** CSS class for the category status badge. */
   private[ui] def statusClass(s: CategoryStatus): String = s match
     case CategoryStatus.Counted(_, _, _, _, _) => "gezaehlt"
     case CategoryStatus.NeedsDecision(_)       => "offen"

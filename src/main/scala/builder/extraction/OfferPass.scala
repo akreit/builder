@@ -19,6 +19,7 @@ enum PassContent:
   * implements this; [[MultiPassOfferExtractor]] turns it into an [[OfferExtractor]].
   */
 trait OfferPass[F[_]]:
+  /** Runs one extraction pass for the given content and known Leistungen. */
   def run(content: PassContent, known: List[Leistung]): F[Either[ExtractionError, RawOffer]]
 
   /** Prompt text (instructions + category context) of a pass, used to size the document budget. */
@@ -30,7 +31,10 @@ object OfferPass:
   def bounded(underlying: OfferPass[IO], permits: Int): IO[OfferPass[IO]] =
     Semaphore[IO](permits.toLong).map(slots =>
       new OfferPass[IO]:
+        /** Delegates to the underlying Claude pass (used by the multi-pass wrapper). */
         def run(content: PassContent, known: List[Leistung]) =
           slots.permit.surround(underlying.run(content, known))
+
+        /** Prompt text from the underlying pass implementation. */
         def promptText(known: List[Leistung]) = underlying.promptText(known)
     )

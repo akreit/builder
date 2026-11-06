@@ -16,6 +16,7 @@ import java.nio.file.StandardCopyOption
   * transaction fails, [[finish]] drops the backup after it committed.
   */
 final class FileStore(dir: Path):
+  /** Canonical path of the live file for an offer id and type. */
   private def path(id: OfferId, fileType: OfferFileType): Path =
     dir.resolve(s"${id.value}.${fileType.extension}")
 
@@ -61,6 +62,7 @@ final class FileStore(dir: Path):
   def finish(installed: FileStore.Installed): IO[Unit] =
     installed.backups.traverse_(b => IO.blocking(Files.deleteIfExists(b.backup)).void)
 
+  /** Recursively moves remaining live paths aside, collecting backups. */
   private def aside(rest: List[Path], done: List[FileStore.Backup]): IO[List[FileStore.Backup]] =
     rest match
       case Nil          => IO.pure(done)
@@ -70,6 +72,7 @@ final class FileStore(dir: Path):
           case Left(e)  => restore(done) >> IO.raiseError(e)
         }
 
+  /** Moves one live file to a `.bak` sibling when it exists. */
   private def moveAside(live: Path): IO[Option[FileStore.Backup]] =
     IO.blocking(Files.exists(live))
       .flatMap(exists =>
@@ -82,6 +85,7 @@ final class FileStore(dir: Path):
           )
       )
 
+  /** Restores backed-up files after a failed install/transaction. */
   private def restore(backups: List[FileStore.Backup]): IO[Unit] =
     backups.traverse_(b =>
       IO.blocking(

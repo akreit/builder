@@ -20,19 +20,23 @@ import scala.util.Using
   * the category and offer headings; no content is truncated.
   */
 object ComparisonPdf:
+  /** Column heading: contractor label, or the file name when unrecognised. */
   private def offerHeading(col: MatrixColumn): String =
     val label = OfferLabel.display(col.raw)
     if label.nonEmpty then label else col.upload.upload.fileName
 
+  /** German coverage word for a matrix cell. */
   private def coverage(c: Coverage): String = c match
     case Coverage.Enthalten      => "enthalten"
     case Coverage.NichtEnthalten => "NICHT ENTHALTEN"
     case Coverage.Ausgeschlossen => "AUSGESCHLOSSEN"
     case Coverage.Unklar         => "UNKLAR"
 
+  /** Multi-line position block (description, quantity, unit/EP/total). */
   private def position(li: RawLineItem): String =
     s"${li.description.text.getOrElse("Beschreibung fehlt")}\nMenge: ${li.quantity.text.getOrElse("?")} ${li.unit.text.getOrElse("")}\nEP: ${li.unitPrice.text.getOrElse("?")}\nGesamt: ${li.total.text.getOrElse("?")}"
 
+  /** Cell text for one Leistung/offer: coverage, sum and nested positions. */
   private def cellText(m: Matrix, row: MatrixRow, i: Int): String =
     row.cells
       .lift(i)
@@ -46,6 +50,7 @@ object ComparisonPdf:
             .mkString("\n", "\n", "")
       )
 
+  /** Row of unassigned positions for the selected offer columns. */
   private def unassignedRow(m: Matrix, indexes: List[Int]): List[String] =
     "Nicht zugeordnet" :: indexes.map(i =>
       m.columns
@@ -59,6 +64,7 @@ object ComparisonPdf:
         .mkString("\n")
     )
 
+  /** Row of column check-sums versus offer net. */
   private def totalsRow(m: Matrix, indexes: List[Int]): List[String] =
     "Summe Zellen + nicht zugeordnet" :: indexes.map(i =>
       m.totals
@@ -70,6 +76,7 @@ object ComparisonPdf:
         )
     )
 
+  /** Row of explicit exclusions per offer column. */
   private def exclusionsRow(m: Matrix, indexes: List[Int]): List[String] =
     "AUSSCHLÜSSE" :: indexes.map(i =>
       m.columns
@@ -81,6 +88,7 @@ object ComparisonPdf:
         )
     )
 
+  /** Row of offer headings with validation status. */
   private def offerStatusRow(m: Matrix, indexes: List[Int]): List[String] =
     "Angebot / Status" :: indexes.map(i =>
       m.columns
@@ -102,9 +110,11 @@ object ComparisonPdf:
       exclusionsRow(m, indexes)
     ))
 
+  /** Replaces characters the Helvetica font cannot encode with `?`. */
   private def safeText(font: PDType1Font, s: String): String =
     s.map(c => if Try(font.encode(c.toString)).isSuccess then c else '?')
 
+  /** Word-wraps text to `width` (PDF user units), keeping explicit newlines. */
   private def wrapped(font: PDType1Font, s: String, width: Float): List[String] =
     s.split("\n", -1).toList.flatMap { line =>
       val (done, last) =
@@ -117,6 +127,7 @@ object ComparisonPdf:
       (last :: done).reverse
     }
 
+  /** Adds one landscape page with title, headings and body lines. */
   private def writePage(
       doc: PDDocument,
       font: PDType1Font,
@@ -131,6 +142,7 @@ object ComparisonPdf:
     val page = PDPage(PDRectangle(842, 595))
     doc.addPage(page)
     Using.resource(PDPageContentStream(doc, page)) { cs =>
+      /** Shows a single text run at `(x,y)` with the page font. */
       def text(s: String, x: Float, y: Float, size: Float): Unit =
         cs.beginText()
         cs.setFont(font, size)
@@ -155,6 +167,7 @@ object ComparisonPdf:
       )
     }
 
+  /** Renders every offer-batch page for one project category. */
   private def renderCategory(
       doc: PDDocument,
       font: PDType1Font,

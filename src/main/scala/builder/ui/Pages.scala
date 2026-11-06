@@ -36,6 +36,11 @@ object Pages:
   /** A full error page (body of an HTML error response such as 404). */
   def message(text: String): String = ErrorPage.errorPage(text)
 
+  /** German description of a domain validation error. */
   def describe(e: DomainError): String = Describe.describe(e)
+
+  /** German description of an extraction draft issue. */
   def describe(i: Issue): String = Describe.describe(i)
+
+  /** German description of an extraction transport/API error. */
   def describe(e: ExtractionError): String = Describe.describe(e)

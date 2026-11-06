@@ -45,6 +45,7 @@ final case class Unassigned(offer: OfferId, item: Int, description: String)
   * `None` where a price is unreadable / missing.
   */
 final case class ColumnTotal(cells: Option[Money], unassigned: Option[Money], net: Option[Money]):
+  /** Cells + unassigned money when both are known; else `None`. */
   def sum: Option[Money] =
     (cells, unassigned) match
       case (Some(c), Some(u))                               => c.plus(u).toOption
@@ -71,6 +72,7 @@ final case class Matrix(
 
 /** Builds and interprets the category Leistungen matrix (cells, unassigned, column totals). */
 object Matrix:
+  /** Raw extraction from an accepted or rejected upload; failed uploads have none. */
   private def raw(u: UploadView): Option[RawOffer] = u.status match
     case UploadStatus.Accepted(r, _)      => Some(r)
     case UploadStatus.Rejected(r, _)      => Some(r)
@@ -100,6 +102,7 @@ object Matrix:
       .collect { case (k, Some(e)) => k -> e }
       .toMap
 
+  /** Builds one matrix cell from coverage, mapped items and known prices. */
   def cell(
       read: Option[CoverageEntry],
       items: List[Int],
@@ -189,6 +192,7 @@ object Matrix:
       }
     )
 
+  /** Sums known prices; `None` if any price is missing or currencies clash. */
   private def sumPrices(currency: Currency, prices: List[Option[Money]]): Option[Money] =
     if prices.exists(_.isEmpty) then None else Money.sum(currency, prices.flatten).toOption
 

@@ -10,11 +10,13 @@ opaque type MinorUnits = BigInt
 
 /** Construction and access for [[MinorUnits]]. */
 object MinorUnits:
+  /** Wraps an integral minor-unit amount. */
   def apply(value: BigInt): MinorUnits = value
   extension (m: MinorUnits) def value: BigInt = m
 
 /** Currency-safe money: amounts in different currencies can never be combined silently. */
 final case class Money(minor: MinorUnits, currency: Currency):
+  /** Adds two amounts of the same currency; mismatch is [[MoneyError.CurrencyMismatch]]. */
   def plus(other: Money): Either[MoneyError, Money] =
     Either.cond(
       currency == other.currency,
@@ -28,8 +30,10 @@ final case class Money(minor: MinorUnits, currency: Currency):
       (BigDecimal(minor.value) * factor).setScale(0, BigDecimal.RoundingMode.HALF_UP).toBigInt
     Money(MinorUnits(minorUnits), currency)
 
+  /** True when the minor amount is negative. */
   def isNegative: Boolean = minor.value < 0
 
+  /** Major-unit decimal using the currency's scale. */
   def toDecimal: BigDecimal = BigDecimal(minor.value, currency.minorDigits)
 
   /** Plain decimal string with exactly the currency's minor digits, e.g. "1234.50". */
@@ -37,8 +41,10 @@ final case class Money(minor: MinorUnits, currency: Currency):
 
 /** Factories and aggregation for [[Money]]. */
 object Money:
+  /** Zero amount in the given currency. */
   def zero(currency: Currency): Money = Money(MinorUnits(BigInt(0)), currency)
 
+  /** Constructs money from a `Long` minor-unit value. */
   def ofMinor(minor: Long, currency: Currency): Money = Money(MinorUnits(BigInt(minor)), currency)
 
   /** Parses a major-unit decimal, rejecting amounts with more precision than the currency allows.

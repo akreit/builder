@@ -67,6 +67,7 @@ object ProjectFragment:
       )
     )
 
+  /** One Leistungsverzeichnis summary row (counts, net, status). */
   private def verzeichnisRow(view: ProjectView, ct: CategoryTotal): Frag =
     val leistungCount = view.leistungen.count(_.category == ct.category.id)
     val offerCount = view.project.offers.count(_.category == ct.category.id)

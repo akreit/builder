@@ -36,10 +36,14 @@ object Describe:
       s"Angebot $o in ${act.code} statt ${exp.code}"
     case DomainError.FavoriteNotInCategory(c, o) =>
       s"Angebot $o gehört nicht zur Kategorie $c"
+
+  /** German user-facing text for an [[Issue]]. */
   def describe(i: Issue): String = i match
     case Issue.Missing(field)         => s"$field fehlt"
     case Issue.Unreadable(field, raw) => s"$field nicht lesbar: '$raw'"
     case Issue.Invalid(field, e)      => s"$field: ${describe(e)}"
+
+  /** German user-facing text for an [[ExtractionError]] (no secrets/bodies). */
   def describe(e: ExtractionError): String = e match
     case ExtractionError.MissingApiKey   => "Kein ANTHROPIC_API_KEY gesetzt"
     case ExtractionError.Transport(kind) => s"Verbindung zur Claude-API fehlgeschlagen ($kind)"

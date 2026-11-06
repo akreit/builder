@@ -41,6 +41,7 @@ object Main extends IOApp.Simple:
   ): Either[builder.domain.DomainError, builder.domain.Project] =
     DefaultProject.shell(env)
 
+  /** IOApp entry: migrate the database, wire extractor and HTTP routes, serve until cancelled. */
   def run: IO[Unit] =
     val app = for
       shell <- cats.effect.Resource.eval(

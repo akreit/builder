@@ -6,6 +6,7 @@ import scalatags.Text.all.*
 
 /** Rename and delete controls of a category. */
 object CategoryEdit:
+  /** Inline rename/delete controls for one category. */
   private[ui] def categoryEdit(project: Project, category: Category): Frag =
     tag("details")(cls := "kategorie-bearbeiten")(
       tag("summary")(cls := "hinweis")("Kategorie bearbeiten"),

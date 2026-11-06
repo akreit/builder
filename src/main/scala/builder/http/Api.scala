@@ -168,31 +168,40 @@ object Api:
       case other               => Left(s"Unbekannte Aktion: $other")
     }
 
+  /** Required non-empty trimmed form field, or a German "missing field" error. */
   private def field(form: Map[String, String], k: String): Either[String, String] =
     form.get(k).map(_.trim).filter(_.nonEmpty).toRight(s"Feld '$k' fehlt")
 
+  /** Maps a domain error to the German UI description. */
   private def domain[A](e: Either[DomainError, A]): Either[String, A] = e.left.map(Pages.describe)
 
+  /** Parses `kategorie` as a [[CategoryId]]. */
   private def categoryId(form: Map[String, String]): Either[String, CategoryId] =
     field(form, "kategorie").flatMap(c => domain(CategoryId.from(c)))
 
+  /** Parses `name` as a [[CategoryName]]. */
   private def categoryName(form: Map[String, String]): Either[String, CategoryName] =
     field(form, "name").flatMap(n => domain(CategoryName.from(n)))
 
+  /** Parses a new category name with a dedicated empty-name message. */
   private def newCategoryName(form: Map[String, String]): Either[String, CategoryName] =
     form.get("name").map(_.trim).filter(_.nonEmpty) match
       case Some(n) => domain(CategoryName.from(n))
       case None    => Left("Kategorie: Bitte einen Namen eingeben.")
 
+  /** Parses a named form field as a [[LeistungId]]. */
   private def leistungId(form: Map[String, String], k: String): Either[String, LeistungId] =
     field(form, k).flatMap(l => domain(LeistungId.from(l)))
 
+  /** Parses `name` as a [[LeistungName]]. */
   private def leistungName(form: Map[String, String]): Either[String, LeistungName] =
     field(form, "name").flatMap(n => domain(LeistungName.from(n)))
 
+  /** Parses `angebot` as an [[OfferId]]. */
   private def offerId(form: Map[String, String]): Either[String, OfferId] =
     field(form, "angebot").flatMap(o => domain(OfferId.from(o)))
 
+  /** Parses 1-based `position` into a 0-based index. */
   private def positionIndex(form: Map[String, String]): Either[String, Int] =
     field(form, "position").flatMap(
       _.toIntOption.filter(_ >= 1).map(_ - 1).toRight("Ungültige Position")
@@ -256,6 +265,7 @@ final class Api(
     extractor: OfferExtractor[IO],
     files: FileStore
 ):
+  /** JSON totals for a project id, or a typed API error. */
   private def totalsLogic(raw: String): IO[Either[ApiError, TotalsResponse]] =
     ProjectId.from(raw) match
       case Left(_)   => IO.pure(Left(ApiError.InvalidProjectId(raw)))
@@ -272,6 +282,7 @@ final class Api(
             }
           )
 
+  /** PDF bytes of the Leistungsvergleich for a project id. */
   private def comparisonPdfLogic(raw: String): IO[Either[ApiError, Array[Byte]]] =
     ProjectId.from(raw) match
       case Left(_)   => IO.pure(Left(ApiError.InvalidProjectId(raw)))
@@ -289,9 +300,11 @@ final class Api(
               .map(_.left.map(_ => ApiError.StorageFailed("pdf-export")))
         }
 
+  /** HTML 404 page for an unknown project or category. */
   private def notFound(what: String): HtmlError =
     HtmlError(StatusCode.NotFound, Pages.message(s"$what nicht gefunden"))
 
+  /** Full HTML error page for a repository failure. */
   private def pageError(e: RepoError): HtmlError = e match
     case RepoError.Storage(code) =>
       HtmlError(
@@ -314,6 +327,7 @@ final class Api(
         ).left.map(pageError)
       )
 
+  /** Renders one category tab (or 404) as a full HTML page. */
   private def categoryPageLogic(
       projectId: String,
       categoryId: String
@@ -332,6 +346,7 @@ final class Api(
             ).left.map(pageError)
           )
 
+  /** htmx error fragment retargeted at `#fehler` with the given status. */
   private def fragmentError(status: StatusCode, text: String): HtmlError =
     HtmlError(status, Pages.errorFragment(text))
 
@@ -345,6 +360,7 @@ final class Api(
     else Right(())
   }
 
+  /** Marks a favorite and returns the re-rendered project fragment. */
   private def favoriteLogic(
       projectId: String,
       categoryId: String,
@@ -364,6 +380,7 @@ final class Api(
           case Left(e) => Left(repoError(e))
         }
 
+  /** Deletes an offer (DB + file cleanup under the lock) and re-renders the fragment. */
   private def deleteOfferLogic(
       projectId: String,
       categoryId: String,
@@ -386,6 +403,7 @@ final class Api(
             Right(Pages.projectFragment(view, Pages.activeCategory(view, Some(c))))
         }
 
+  /** Maps a [[RepoError]] to an htmx HTML error fragment. */
   private def repoError(e: RepoError): HtmlError = e match
     case RepoError.ProjectNotFound(_) =>
       fragmentError(StatusCode.NotFound, "Projekt nicht gefunden")
@@ -423,9 +441,11 @@ final class Api(
             (url, Pages.projectFragment(v, active))
           }.left.map(repoError))
 
+  /** Fresh upload offer id (`upl-` + short UUID). */
   private def newOfferId: IO[Either[DomainError, OfferId]] =
     UUIDGen[IO].randomUUID.map(u => OfferId.from(s"upl-${u.toString.replace("-", "").take(12)}"))
 
+  /** Validates, extracts, stores an upload and returns the project fragment HTML. */
   private def uploadLogic(
       projectId: String,
       categoryId: String,
@@ -567,6 +587,8 @@ final class Api(
 
   /** htmx endpoints get fragments, all others tapir's default responses. */
   private val decodeFailureHandler: DecodeFailureHandler[IO] = new DecodeFailureHandler[IO]:
+    /** Tapir decode-failure handler: htmx fragments for edit/upload endpoints, default otherwise.
+      */
     def apply(ctx: DecodeFailureContext)(implicit
         monad: MonadError[IO]
     ): IO[Option[ValuedEndpointOutput[?]]] =

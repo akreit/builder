@@ -12,16 +12,20 @@ import io.circe.Encoder
   * turns it into a validated [[builder.domain.Offer]].
   */
 final case class Field(value: Option[String], page: Option[Int], confidence: Confidence):
+  /** Trimmed non-empty text, if the extractor returned any. */
   def text: Option[String] = value.map(_.trim).filter(_.nonEmpty)
 
   /** The source page; absent, 0 or negative means the document does not say. */
   def pageNumber: Option[PageNumber] = page.flatMap(PageNumber.from(_).toOption)
+
+  /** True when confidence is [[Confidence.Low]]. */
   def isLowConfidence: Boolean = confidence match
     case Confidence.Low                      => true
     case Confidence.Medium | Confidence.High => false
 
 /** Circe codecs for [[Field]] and [[Confidence]]. */
 object Field:
+  /** Lower-case wire name for Circe encoding of [[Confidence]]. */
   private def wire(c: Confidence): String = c.toString.toLowerCase
 
   given Encoder[Confidence] = Encoder.encodeString.contramap(wire)

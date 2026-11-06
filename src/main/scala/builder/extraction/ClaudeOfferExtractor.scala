@@ -27,7 +27,10 @@ opaque type ApiKey = String
 
 /** Construction of [[ApiKey]] from raw text or the environment. */
 object ApiKey:
+  /** Non-empty trimmed API key, or `None`. */
   def from(raw: String): Option[ApiKey] = Some(raw.trim).filter(_.nonEmpty)
+
+  /** Reads `ANTHROPIC_API_KEY` from the process environment. */
   def fromEnv: Option[ApiKey] = sys.env.lift("ANTHROPIC_API_KEY").flatMap(from)
   extension (k: ApiKey) private[extraction] def secret: String = k
 
@@ -41,6 +44,7 @@ final case class RetryPolicy(
     maxDelay: FiniteDuration,
     overallTimeout: FiniteDuration
 ):
+  /** Backoff delay for retry `n`, honouring `retry-after` when present (equal jitter). */
   def delay(
       retry: Int,
       retryAfter: Option[FiniteDuration],
@@ -80,8 +84,10 @@ final class ClaudeOfferExtractor(
 ) extends OfferPass[IO]:
   import ClaudeOfferExtractor.*
 
+  /** User prompt text including the category's known Leistungen. */
   def promptText(known: List[Leistung]): String = instructions(known, prompts)
 
+  /** Runs one Claude Messages pass for the given content and known Leistungen. */
   def run(content: PassContent, known: List[Leistung]): IO[Either[ExtractionError, RawOffer]] =
     key match
       case None    => IO.pure(Left(ExtractionError.MissingApiKey))
@@ -100,6 +106,7 @@ final class ClaudeOfferExtractor(
           .flatMap(random => withRetries(req, random, 0))
           .timeoutTo(retry.overallTimeout, IO.pure(Left(ExtractionError.TimedOut)))
 
+  /** Retries transport/429/5xx per [[RetryPolicy]]; other failures fail immediately. */
   private def withRetries(
       req: Request[IO],
       random: Random[IO],
@@ -116,6 +123,7 @@ final class ClaudeOfferExtractor(
         )
     }
 
+  /** Single HTTP attempt; classifies status and body into success or typed error. */
   private def once(req: Request[IO]): IO[Attempt] =
     client
       .run(req)
@@ -152,10 +160,13 @@ object ClaudeOfferExtractor:
     classOf[java.nio.channels.ClosedChannelException]
   )
 
+  /** True for connection-level failures worth retrying. */
   private def isConnectionError(e: Throwable): Boolean = connectionErrors.exists(_.isInstance(e))
 
+  /** True for HTTP statuses that the policy retries (429 and 5xx). */
   private def isRetryable(code: Int): Boolean = code == 429 || (code >= 500 && code <= 599)
 
+  /** Parses `retry-after` from response headers as a duration. */
   private def retryAfter(headers: Headers): Option[FiniteDuration] =
     headers
       .get(CIString("retry-after"))
@@ -196,6 +207,7 @@ object ClaudeOfferExtractor:
 
   private val field: Json = Json.obj("$ref" -> "#/$defs/feld".asJson)
 
+  /** JSON Schema object with the given properties and `additionalProperties: false`. */
   private def obj(fields: List[(String, Json)]): Json = Json.obj(
     "type" -> "object".asJson,
     "properties" -> Json.fromFields(fields),
@@ -203,8 +215,10 @@ object ClaudeOfferExtractor:
     "additionalProperties" -> false.asJson
   )
 
+  /** Named properties all referencing the shared `feld` definition. */
   private def fields(names: String*): List[(String, Json)] = names.toList.map(_ -> field)
 
+  /** JSON Schema array whose items use `item`. */
   private def arrayOf(item: Json): Json = Json.obj("type" -> "array".asJson, "items" -> item)
 
   val inputSchema: Json = obj(
@@ -256,15 +270,18 @@ object ClaudeOfferExtractor:
       )
   ).deepMerge(Json.obj("$defs" -> Json.obj("feld" -> fieldDef)))
 
+  /** Base64 source object for a document/image content block. */
   private def base64(file: Array[Byte], mediaType: String): Json = Json.obj(
     "type" -> "base64".asJson,
     "media_type" -> mediaType.asJson,
     "data" -> Base64.getEncoder.encodeToString(file).asJson
   )
 
+  /** Text content block for the Messages API. */
   private def textBlock(text: String): Json =
     Json.obj("type" -> "text".asJson, "text" -> text.asJson)
 
+  /** Builds the human content block (PDF text, scan document, or image) plus prompt. */
   private def contentBlock(content: PassContent, prompts: ExtractionPrompts): Json =
     content match
       case PassContent.Image(bytes, fileType) =>
@@ -281,6 +298,7 @@ object ClaudeOfferExtractor:
   def instructions(known: List[Leistung], prompts: ExtractionPrompts): String =
     s"${prompts.offerExtraction}\n\n${prompts.knownText(known)}"
 
+  /** Full Messages API request body for one pass (model, schema, content). */
   def requestBody(
       model: String,
       content: PassContent,

@@ -47,6 +47,7 @@ object TotalsResponse:
       undecidedCategories = t.undecidedCategories.map(_.name.value)
     )
 
+  /** Maps a domain category total into the JSON DTO shape. */
   private def toDto(ct: CategoryTotal): CategoryTotalDto =
     val cid = ct.category.id.value
     val name = ct.category.name.value

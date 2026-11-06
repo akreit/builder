@@ -31,15 +31,21 @@ final case class ProjectTotals(
     net: Money,
     gross: Money
 ):
+  /** Categories that still have no offer. */
   def missingCategories: List[Category] =
     categories.collect { case CategoryTotal(c, CategoryStatus.NoOffer) => c }
+
+  /** Categories with several offers and no favorite. */
   def undecidedCategories: List[Category] =
     categories.collect { case CategoryTotal(c, CategoryStatus.NeedsDecision(_)) => c }
+
+  /** True when every category is counted (none missing or undecided). */
   def isComplete: Boolean = missingCategories.isEmpty && undecidedCategories.isEmpty
 
 /** Pure total calculation from a validated [[Project]]. */
 object Totals:
 
+  /** Builds a counted status from an offer and the reason it was chosen. */
   private def counted(o: Offer, r: CountedReason): CategoryStatus =
     CategoryStatus.Counted(o.id, o.contractor.value, o.net.value, o.gross.value, r)
 
@@ -66,6 +72,7 @@ object Totals:
     )
     val counted = cats.collect { case CategoryTotal(_, s: CategoryStatus.Counted) => s }
     // Project.from guarantees every amount is in `cur`, so plain minor-unit sums are safe.
+    /** Sums a money field over all counted categories in the project currency. */
     def total(f: CategoryStatus.Counted => Money): Money =
       Money(MinorUnits(counted.map(f(_).minor.value).sum), cur)
     ProjectTotals(project.id, cur, cats, total(_.net), total(_.gross))

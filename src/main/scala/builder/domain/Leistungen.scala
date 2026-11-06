@@ -5,6 +5,7 @@ opaque type LeistungId = String
 
 /** Smart constructor for [[LeistungId]]. */
 object LeistungId:
+  /** Smart constructor using the shared domain id grammar. */
   def from(raw: String): Either[DomainError, LeistungId] = validId("leistung", raw)
   extension (id: LeistungId) def value: String = id
 
@@ -13,6 +14,7 @@ opaque type LeistungName = String
 
 /** Smart constructor for [[LeistungName]]. */
 object LeistungName:
+  /** Trims and rejects empty or overlong names (max 80 characters). */
   def from(raw: String): Either[DomainError, LeistungName] =
     val trimmed = raw.trim
     Either.cond(
@@ -43,6 +45,7 @@ object Coverage:
     case Ausgeschlossen => "ausgeschlossen"
     case Unklar         => "unklar"
 
+  /** Parses a coverage wire code; unknown codes yield `None`. */
   def fromCode(s: String): Option[Coverage] = values.find(code(_) == s.trim.toLowerCase)
 
 /** Where a coverage status comes from. */

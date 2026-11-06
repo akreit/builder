@@ -15,16 +15,21 @@ import scalatags.Text.tags2
   * [[OfferDetail.collapsiblePositions]].
   */
 object LeistungenMatrix:
+  /** German label for a coverage status. */
   private[ui] def coverageLabel(c: Coverage): String = c match
     case Coverage.Enthalten      => "enthalten"
     case Coverage.NichtEnthalten => "nicht enthalten"
     case Coverage.Ausgeschlossen => "ausgeschlossen"
     case Coverage.Unklar         => "unklar"
+
+  /** CSS class for a coverage status. */
   private[ui] def coverageClass(c: Coverage): String = c match
     case Coverage.Enthalten      => "st-enthalten"
     case Coverage.NichtEnthalten => "st-nicht"
     case Coverage.Ausgeschlossen => "st-ausgeschlossen"
     case Coverage.Unklar         => "st-unklar"
+
+  /** Short German explanation of where a coverage value came from. */
   private[ui] def sourceText(s: CoverageSource): String = s match
     case CoverageSource.Read(page, conf) =>
       page.fold("ohne Seite")(p => s"S. ${p.value}") + (conf match
@@ -34,6 +39,8 @@ object LeistungenMatrix:
     case CoverageSource.FromItems => "aus Positionen"
     case CoverageSource.Manual    => "manuell"
     case CoverageSource.Unknown   => "nicht erkannt"
+
+  /** Offer column title (contractor label or file name). */
   private[ui] def columnTitle(c: MatrixColumn): String =
     val label = OfferLabel.display(c.raw)
     if label.nonEmpty then label else c.upload.upload.fileName
@@ -60,6 +67,7 @@ object LeistungenMatrix:
           OfferDetail.collapsiblePositions(all, cur)
         )
 
+  /** One matrix cell: coverage control, price, flags and positions. */
   private[ui] def matrixCell(project: Project, col: MatrixColumn, l: Leistung, c: Cell): Frag =
     val chosen = c.source match
       case CoverageSource.Manual => Coverage.code(c.coverage)
@@ -101,6 +109,8 @@ object LeistungenMatrix:
         )
       )
     )
+
+  /** Leistung row header with rename/merge/delete controls. */
   private[ui] def leistungHeader(project: Project, l: Leistung, others: List[Leistung]): Frag =
     th(cls := "leistung", attr("data-leistung") := l.id.value)(
       l.name.value,
@@ -158,6 +168,7 @@ object LeistungenMatrix:
       }
     )
 
+  /** Leistungsvergleich section for one category (table, assignments, add forms). */
   private[ui] def leistungenSection(view: ProjectView, category: Category): Frag =
     val project = view.project
     val m = Matrix.build(view, category.id)
@@ -179,6 +190,7 @@ object LeistungenMatrix:
       addCategoryInComparison(project)
     )
 
+  /** HTML table of Leistungen × offers including unassigned and footer sums. */
   private def matrixTable(project: Project, m: Matrix, leistungen: List[Leistung]): Frag =
     table(cls := "matrix")(
       thead(tr(th("Leistung"), m.columns.map(c => th(columnTitle(c))))),
@@ -195,6 +207,7 @@ object LeistungenMatrix:
       tfoot(totalsRow(m))
     )
 
+  /** Footer-style row listing unassigned positions per offer. */
   private def unassignedRow(m: Matrix): Frag =
     tr(cls := "nicht-zugeordnet")(
       th("Nicht zugeordnet"),
@@ -207,6 +220,7 @@ object LeistungenMatrix:
       )
     )
 
+  /** Column total cells with mismatch highlighting. */
   private def totalsRow(m: Matrix): Frag =
     tr(cls := "summen")(
       th("Summe Zellen + nicht zugeordnet"),
@@ -224,6 +238,7 @@ object LeistungenMatrix:
       )
     )
 
+  /** Warnings when the extractor dropped Leistungsvorschläge beyond the cap. */
   private def droppedWarnings(m: Matrix): Frag =
     frag(
       m.columns.zip(m.dropped).collect {
@@ -235,6 +250,7 @@ object LeistungenMatrix:
       }*
     )
 
+  /** Collapsible manual assignment UI for native-category offers. */
   private def assignmentDetails(
       view: ProjectView,
       project: Project,
@@ -250,6 +266,7 @@ object LeistungenMatrix:
         nativeColumns.map(col => assignmentColumn(view, project, col))
       )
 
+  /** Assignment table for one offer column. */
   private def assignmentColumn(view: ProjectView, project: Project, col: MatrixColumn): Frag =
     val assigned = Matrix.effective(view.assignments)
     div(
@@ -281,6 +298,7 @@ object LeistungenMatrix:
       )
     )
 
+  /** Form to add a Leistung in this category. */
   private def addLeistungForm(project: Project, category: Category): Frag =
     editForm(
       project,
@@ -295,6 +313,7 @@ object LeistungenMatrix:
       button(tpe := "submit")("Leistung hinzufügen")
     )
 
+  /** Form to add a category from inside the comparison view. */
   private def addCategoryInComparison(project: Project): Frag =
     editForm(project, List("aktion" -> "kategorie-neu"), auto = false)(
       input(
