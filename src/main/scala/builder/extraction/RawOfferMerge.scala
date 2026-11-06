@@ -15,6 +15,7 @@ import builder.domain.Confidence
   *   - new Leistungen: first proposal per key; coverage: per Leistung the most specific status.
   */
 object RawOfferMerge:
+  /** Merges multi-pass answers: first contractor, last totals, deduped items, richest coverage. */
   def merge(parts: List[(TextChunk, RawOffer)]): RawOffer =
     parts match
       case (_, only) :: Nil => only
@@ -40,15 +41,20 @@ object RawOfferMerge:
 
   private val absent: Field = Field(None, None, Confidence.Low)
 
+  /** First field that has text; otherwise an absent placeholder. */
   private def first(fields: List[Field]): Field = fields.find(_.text.isDefined).getOrElse(absent)
+
+  /** Last field that has text (reverse of [[first]]). */
   private def last(fields: List[Field]): Field = first(fields.reverse)
 
+  /** Some(list) when non-empty, else `None` (for optional JSON lists). */
   private def optional[A](as: List[A]): Option[List[A]] = Some(as).filter(_.nonEmpty)
 
   /** Which value of several parts is used. */
   private enum Pick:
     case First, Last
 
+  /** Low-confidence notes for disagreeing contractor/total fields across parts. */
   private def conflicts(parts: List[(TextChunk, RawOffer)]): List[Field] =
     List[(String, Pick, RawOffer => Field)](
       ("Firma", Pick.First, _.contractor),
@@ -61,10 +67,12 @@ object RawOfferMerge:
       ("Brutto", Pick.Last, _.gross)
     ).flatMap((label, pick, get) => conflictsOf(label, pick, parts.map((c, o) => (c, get(o)))))
 
+  /** Applies a first/last pick strategy to a list of fields. */
   private def picked(pick: Pick, fields: List[Field]): Field = pick match
     case Pick.First => first(fields)
     case Pick.Last  => last(fields)
 
+  /** Builds conflict note fields for values that disagree across parts. */
   private def conflictsOf(
       label: String,
       pick: Pick,
@@ -87,9 +95,11 @@ object RawOfferMerge:
   private val statusOrder: List[String] =
     List("enthalten", "ausgeschlossen", "nicht_enthalten", "unklar")
 
+  /** Specificity rank of a coverage status code (higher wins when merging). */
   private def rank(status: String): Int =
     Some(statusOrder.indexOf(status)).filter(_ >= 0).getOrElse(statusOrder.size)
 
+  /** Keeps the most specific coverage entry per Leistung key. */
   private def coverage(entries: List[RawAbdeckung]): List[RawAbdeckung] =
     entries
       .groupBy(_.leistung)
@@ -102,6 +112,7 @@ object RawOfferMerge:
   private def itemKey(item: RawLineItem): List[(Option[String], Option[Int])] =
     item.labelled.map((_, f) => (f.text, f.page)) :+ ((item.leistung, None))
 
+  /** Set of page numbers belonging to a text chunk. */
   private def pagesOf(chunk: TextChunk): Set[Int] = chunk.pages.map(_.number).toSet
 
   /** Line items in page order, dropping repeats on pages shared with the previous part. */

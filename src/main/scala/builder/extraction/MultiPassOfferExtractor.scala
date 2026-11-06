@@ -12,6 +12,7 @@ import cats.syntax.all.*
 final class MultiPassOfferExtractor(pass: OfferPass[IO], budget: PassBudget = PassBudget.default)
     extends OfferExtractor[IO]:
 
+  /** Splits the file into budgeted passes, runs each, and merges the raw answers. */
   def extract(
       file: Array[Byte],
       fileType: OfferFileType,
@@ -33,6 +34,7 @@ final class MultiPassOfferExtractor(pass: OfferPass[IO], budget: PassBudget = Pa
   def plan(pages: List[PdfPage], known: List[Leistung]): List[TextChunk] =
     Chunking.chunks(pages, budget.documentChars(pass.promptText(known)), budget.maxPagesPerPass)
 
+  /** Builds the ordered list of pass contents (text chunks or a single document/image). */
   private def passes(
       chunks: List[TextChunk],
       known: List[Leistung]

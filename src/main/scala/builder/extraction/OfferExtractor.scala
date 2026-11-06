@@ -12,8 +12,10 @@ enum OfferFileType(val mediaType: String, val extension: String, val maxMegabyte
   case Jpeg extends OfferFileType("image/jpeg", "jpg", 5)
   case Png extends OfferFileType("image/png", "png", 5)
 
+  /** Maximum upload size in bytes for this file kind. */
   def maxBytes: Int = maxMegabytes * 1024 * 1024
 
+/** Magic-byte detection and extension lookup for [[OfferFileType]]. */
 object OfferFileType:
   private val magic: List[(OfferFileType, List[Int])] = List(
     Pdf -> List(0x25, 0x50, 0x44, 0x46), // %PDF
@@ -21,6 +23,7 @@ object OfferFileType:
     Png -> List(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)
   )
 
+  /** Detects PDF/JPEG/PNG from leading magic bytes (not the file name). */
   def detect(bytes: Array[Byte]): Option[OfferFileType] =
     magic.collectFirst {
       case (t, sig)
@@ -28,6 +31,7 @@ object OfferFileType:
         t
     }
 
+  /** Looks up a file kind by its usual extension. */
   def fromExtension(ext: String): Option[OfferFileType] = values.find(_.extension == ext)
 
 /** Why reading a file failed. Holds no response bodies: only what is safe to store and show. */
@@ -53,17 +57,20 @@ enum ExtractionError:
   * Leistungen (or proposing new coarse ones) in the same pass.
   */
 trait OfferExtractor[F[_]]:
+  /** Reads an offer file into a [[RawOffer]], mapping items onto `known` Leistungen. */
   def extract(
       file: Array[Byte],
       fileType: OfferFileType,
       known: List[Leistung]
   ): F[Either[ExtractionError, RawOffer]]
 
+/** Concurrency wrappers around an [[OfferExtractor]]. */
 object OfferExtractor:
   /** At most `permits` extractions run at the same time; further callers wait for a slot. */
   def bounded(underlying: OfferExtractor[IO], permits: Int): IO[OfferExtractor[IO]] =
     Semaphore[IO](permits.toLong).map(slots =>
       new OfferExtractor[IO]:
+        /** Forwards to the underlying extractor while holding a semaphore permit. */
         def extract(file: Array[Byte], fileType: OfferFileType, known: List[Leistung]) =
           slots.permit.surround(underlying.extract(file, fileType, known))
     )

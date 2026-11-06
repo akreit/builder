@@ -2,14 +2,20 @@ package builder.domain
 
 /** Reference rating of a contractor: 1 to 5 stars. */
 opaque type Stars = Int
+
+/** Smart constructor for [[Stars]] (1–5). */
 object Stars:
+  /** Smart constructor: only values 1–5 are accepted. */
   def from(n: Int): Either[DomainError, Stars] =
     Either.cond(n >= 1 && n <= 5, n, DomainError.InvalidStars(n))
   extension (s: Stars) def value: Int = s
 
 /** Contractors are identified by their name, case and surrounding spaces ignored. */
 opaque type ContractorKey = String
+
+/** Builds a normalised [[ContractorKey]] from a display name. */
 object ContractorKey:
+  /** Builds a key from a display name (trim, lower case, collapse spaces); blank → `None`. */
   def of(name: String): Option[ContractorKey] =
     Option(name.trim.toLowerCase.replaceAll("\\s+", " ")).filter(_.nonEmpty)
   extension (k: ContractorKey) def value: String = k
@@ -17,6 +23,7 @@ object ContractorKey:
 /** What the user knows about a contractor's references. */
 final case class Rating(stars: Stars, note: String)
 
+/** Limits and helpers for [[Rating]]. */
 object Rating:
   /** Longest note kept with a rating. */
   val MaxNote: Int = 500
@@ -26,19 +33,25 @@ enum Criterion:
   case Preis
   case Referenzen
 
+/** Labels and wire codes for [[Criterion]]. */
 object Criterion:
+  /** German label shown in the ranking UI. */
   def label(c: Criterion): String = c match
     case Preis      => "Preis"
     case Referenzen => "Referenzen"
 
+  /** Stable code used in forms and the `weights` table. */
   def code(c: Criterion): String = c match
     case Preis      => "preis"
     case Referenzen => "referenzen"
 
+  /** Inverse of [[code]]; unknown strings yield `None`. */
   def fromCode(s: String): Option[Criterion] = values.find(code(_) == s)
 
 /** Relative weight of each criterion in percent points (0 to 100). */
 opaque type Weights = Map[Criterion, Int]
+
+/** Default and validated [[Weights]] maps for ranking criteria. */
 object Weights:
   val default: Weights = Map(Criterion.Preis -> 50, Criterion.Referenzen -> 50)
 

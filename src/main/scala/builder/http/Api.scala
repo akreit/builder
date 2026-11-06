@@ -11,9 +11,7 @@ import cats.effect.IO
 import cats.effect.Outcome
 import cats.effect.std.UUIDGen
 import cats.syntax.all.*
-import io.circe.Codec
 import org.http4s.HttpRoutes
-import sttp.model.Part
 import sttp.model.StatusCode
 import sttp.monad.MonadError
 import sttp.tapir.*
@@ -27,127 +25,7 @@ import sttp.tapir.server.interceptor.decodefailure.DefaultDecodeFailureHandler
 import sttp.tapir.server.model.EndpointExtensions.*
 import sttp.tapir.server.model.ValuedEndpointOutput
 
-final case class HealthResponse(status: String) derives Codec.AsObject, Schema
-
-final case class CategoryTotalDto(
-    categoryId: String,
-    category: String,
-    status: String,
-    offerId: Option[String],
-    contractor: Option[String],
-    reason: Option[String],
-    net: Option[String],
-    gross: Option[String],
-    candidateOfferIds: List[String]
-) derives Codec.AsObject,
-      Schema
-
-final case class TotalsResponse(
-    projectId: String,
-    currency: String,
-    net: String,
-    gross: String,
-    complete: Boolean,
-    categories: List[CategoryTotalDto],
-    missingCategories: List[String],
-    undecidedCategories: List[String]
-) derives Codec.AsObject,
-      Schema
-
-object TotalsResponse:
-  def from(t: ProjectTotals): TotalsResponse =
-    TotalsResponse(
-      projectId = t.projectId.value,
-      currency = t.currency.code,
-      net = t.net.show,
-      gross = t.gross.show,
-      complete = t.isComplete,
-      categories = t.categories.map(toDto),
-      missingCategories = t.missingCategories.map(_.name.value),
-      undecidedCategories = t.undecidedCategories.map(_.name.value)
-    )
-
-  private def toDto(ct: CategoryTotal): CategoryTotalDto =
-    val cid = ct.category.id.value
-    val name = ct.category.name.value
-    ct.status match
-      case CategoryStatus.Counted(id, c, net, gross, r) =>
-        CategoryTotalDto(
-          cid,
-          name,
-          "counted",
-          Some(id.value),
-          Some(c.name),
-          Some(r.toString),
-          Some(net.show),
-          Some(gross.show),
-          Nil
-        )
-      case CategoryStatus.NoOffer =>
-        CategoryTotalDto(cid, name, "no-offer", None, None, None, None, None, Nil)
-      case CategoryStatus.NeedsDecision(ids) =>
-        CategoryTotalDto(
-          cid,
-          name,
-          "needs-decision",
-          None,
-          None,
-          None,
-          None,
-          None,
-          ids.map(_.value)
-        )
-
-/** Errors the JSON API can return; each case maps to one status code and JSON body. */
-enum ApiError:
-  case InvalidProjectId(projectId: String)
-  case ProjectNotFound(projectId: String)
-  case StorageFailed(code: String)
-
-object ApiError:
-  given Codec.AsObject[InvalidProjectId] = Codec.AsObject.derived
-  given Codec.AsObject[ProjectNotFound] = Codec.AsObject.derived
-  given Schema[InvalidProjectId] = Schema.derived
-  given Schema[ProjectNotFound] = Schema.derived
-  given Codec.AsObject[StorageFailed] = Codec.AsObject.derived
-  given Schema[StorageFailed] = Schema.derived
-
-  val output: EndpointOutput.OneOf[ApiError, ApiError] = oneOf[ApiError](
-    oneOfVariant(StatusCode.BadRequest, jsonBody[InvalidProjectId]),
-    oneOfVariant(StatusCode.NotFound, jsonBody[ProjectNotFound]),
-    oneOfVariant(StatusCode.InternalServerError, jsonBody[StorageFailed])
-  )
-
-/** Response of the start route: a redirect to the first tab, or the page without categories. */
-enum Landing:
-  case Redirect(location: String)
-  case Page(html: String)
-
-/** Error of an HTML endpoint: status code plus a German HTML message. */
-final case class HtmlError(status: StatusCode, html: String)
-
-/** Headers of the CSRF guard; checked (security input) before any body is read. */
-final case class HtmxHeaders(
-    hxRequest: Option[String],
-    origin: Option[String],
-    host: Option[String]
-)
-
-/** The multipart form of an upload: only the `datei` part is decoded, other parts are skipped. */
-final case class UploadForm(datei: Option[Part[Array[Byte]]])
-
-object UploadForm:
-  /** Tapir's raw multipart codec, restricted to the `datei` part (no default part type, so other
-    * parts are not read into memory). Hand-written: the derived codec warns under -Werror.
-    */
-  given MultipartCodec[UploadForm] =
-    MultipartCodec(
-      RawBodyType.MultipartBody(Map("datei" -> RawBodyType.ByteArrayBody), None),
-      MultipartCodec.Default.codec.map(parts => UploadForm(parts.find(_.name == "datei")))(form =>
-        form.datei.toList
-      )
-    )
-
+/** Tapir endpoint descriptions for health, totals, HTML pages, edits and uploads. */
 object Endpoints:
   val comparisonPdf = endpoint.get
     .in("projekte" / path[String]("projectId") / "leistungsvergleich.pdf")
@@ -261,6 +139,7 @@ object Endpoints:
       .errorOut(fragmentError)
       .maxRequestBodyLength(Api.MaxEditBytes)
 
+/** Form parsing limits and shared helpers for the HTTP API. */
 object Api:
   /** Edit forms carry a handful of short fields; anything larger is rejected (413). */
   val MaxEditBytes: Long = 16L * 1024
@@ -270,83 +149,128 @@ object Api:
     * `status` (a coverage code or `auto`) and `name`.
     */
   def parseEdit(form: Map[String, String]): Either[String, Edit] =
-    def field(k: String): Either[String, String] =
-      form.get(k).map(_.trim).filter(_.nonEmpty).toRight(s"Feld '$k' fehlt")
-    def domain[A](e: Either[DomainError, A]): Either[String, A] = e.left.map(Pages.describe)
-    def category = field("kategorie").flatMap(c => domain(CategoryId.from(c)))
-    def categoryName = field("name").flatMap(n => domain(CategoryName.from(n)))
-    def newCategoryName =
-      form.get("name").map(_.trim).filter(_.nonEmpty) match
-        case Some(n) => domain(CategoryName.from(n))
-        case None    => Left("Kategorie: Bitte einen Namen eingeben.")
-    def leistung(k: String) = field(k).flatMap(l => domain(LeistungId.from(l)))
-    def leistungName = field("name").flatMap(n => domain(LeistungName.from(n)))
-    def offer = field("angebot").flatMap(o => domain(OfferId.from(o)))
-    def position = field("position").flatMap(
+    field(form, "aktion").flatMap {
+      case "kategorie-neu"        => newCategoryName(form).map(Edit.AddCategory(_))
+      case "kategorie-umbenennen" =>
+        (categoryId(form), categoryName(form)).mapN(Edit.RenameCategory(_, _))
+      case "kategorie-loeschen" => categoryId(form).map(Edit.DeleteCategory(_))
+      case "leistung-neu"       =>
+        (categoryId(form), leistungName(form)).mapN(Edit.AddLeistung(_, _))
+      case "leistung-umbenennen" =>
+        (leistungId(form, "leistung"), leistungName(form)).mapN(Edit.RenameLeistung(_, _))
+      case "leistung-zusammenfuehren" =>
+        (leistungId(form, "leistung"), leistungId(form, "ziel")).mapN(Edit.MergeLeistung(_, _))
+      case "leistung-loeschen" => leistungId(form, "leistung").map(Edit.DeleteLeistung(_))
+      case "position-zuordnen" => parseAssignItem(form)
+      case "status-setzen"     => parseSetCoverage(form)
+      case "bewertung"         => parseRating(form)
+      case "gewichtung"        => parseWeights(form)
+      case other               => Left(s"Unbekannte Aktion: $other")
+    }
+
+  /** Required non-empty trimmed form value; missing/blank → `Left("Feld '<k>' fehlt")`. */
+  private def field(form: Map[String, String], k: String): Either[String, String] =
+    form.get(k).map(_.trim).filter(_.nonEmpty).toRight(s"Feld '$k' fehlt")
+
+  /** Maps a domain error to the German UI description. */
+  private def domain[A](e: Either[DomainError, A]): Either[String, A] = e.left.map(Pages.describe)
+
+  /** Parses `kategorie` as a [[CategoryId]]. */
+  private def categoryId(form: Map[String, String]): Either[String, CategoryId] =
+    field(form, "kategorie").flatMap(c => domain(CategoryId.from(c)))
+
+  /** Parses `name` as a [[CategoryName]]. */
+  private def categoryName(form: Map[String, String]): Either[String, CategoryName] =
+    field(form, "name").flatMap(n => domain(CategoryName.from(n)))
+
+  /** `name` via [[CategoryName.from]]; blank/missing → dedicated "Bitte einen Namen eingeben"
+    * message.
+    */
+  private def newCategoryName(form: Map[String, String]): Either[String, CategoryName] =
+    form.get("name").map(_.trim).filter(_.nonEmpty) match
+      case Some(n) => domain(CategoryName.from(n))
+      case None    => Left("Kategorie: Bitte einen Namen eingeben.")
+
+  /** Parses a named form field as a [[LeistungId]]. */
+  private def leistungId(form: Map[String, String], k: String): Either[String, LeistungId] =
+    field(form, k).flatMap(l => domain(LeistungId.from(l)))
+
+  /** Parses `name` as a [[LeistungName]]. */
+  private def leistungName(form: Map[String, String]): Either[String, LeistungName] =
+    field(form, "name").flatMap(n => domain(LeistungName.from(n)))
+
+  /** Parses `angebot` as an [[OfferId]]. */
+  private def offerId(form: Map[String, String]): Either[String, OfferId] =
+    field(form, "angebot").flatMap(o => domain(OfferId.from(o)))
+
+  /** Parses `position` as Int ≥ 1 and returns the 0-based index; else `Left("Ungültige Position")`.
+    */
+  private def positionIndex(form: Map[String, String]): Either[String, Int] =
+    field(form, "position").flatMap(
       _.toIntOption.filter(_ >= 1).map(_ - 1).toRight("Ungültige Position")
     )
-    field("aktion").flatMap {
-      case "kategorie-neu"        => newCategoryName.map(Edit.AddCategory(_))
-      case "kategorie-umbenennen" => (category, categoryName).mapN(Edit.RenameCategory(_, _))
-      case "kategorie-loeschen"   => category.map(Edit.DeleteCategory(_))
-      case "leistung-neu"         => (category, leistungName).mapN(Edit.AddLeistung(_, _))
-      case "leistung-umbenennen"  =>
-        (leistung("leistung"), leistungName).mapN(Edit.RenameLeistung(_, _))
-      case "leistung-zusammenfuehren" =>
-        (leistung("leistung"), leistung("ziel")).mapN(Edit.MergeLeistung(_, _))
-      case "leistung-loeschen" => leistung("leistung").map(Edit.DeleteLeistung(_))
-      case "position-zuordnen" =>
-        val target = form.get("ziel").map(_.trim).filter(_.nonEmpty) match
-          case Some(l) => domain(LeistungId.from(l)).map(Some(_))
-          case None    => Right(None)
-        (offer, position, target).mapN(Edit.AssignItem(_, _, _))
-      case "status-setzen" =>
-        val status = field("status").flatMap {
-          case "auto" => Right(None)
-          case code   => Coverage.fromCode(code).map(Some(_)).toRight(s"Unbekannter Status: $code")
-        }
-        (offer, leistung("leistung"), status).mapN(Edit.SetCoverage(_, _, _))
-      case "bewertung" =>
-        val key = field("firma").flatMap(ContractorKey.of(_).toRight("Feld 'firma' fehlt"))
-        val note = form.get("notiz").map(_.trim).getOrElse("")
-        val noteOk = Either.cond(
-          note.length <= Rating.MaxNote,
-          (),
-          s"Notiz zu lang (höchstens ${Rating.MaxNote} Zeichen)"
-        )
-        val rating = noteOk.flatMap(_ =>
-          form.get("sterne").map(_.trim).filter(_.nonEmpty) match
-            case None    => Right(None)
-            case Some(n) =>
-              n.toIntOption
-                .toRight(s"Ungültige Sternezahl: $n")
-                .flatMap(i => domain(Stars.from(i)))
-                .map(st => Some(Rating(st, note)))
-        )
-        (key, rating).mapN(Edit.RateContractor(_, _))
-      case "gewichtung" =>
-        Criterion.values.toList
-          .traverse(c =>
-            field(s"gewicht-${Criterion.code(c)}")
-              .flatMap(_.toIntOption.toRight(s"Ungültige Gewichtung für ${Criterion.label(c)}"))
-              .map(c -> _)
-          )
-          .flatMap(ws => domain(Weights.from(ws.toMap)))
-          .map(Edit.SetWeights(_))
-      case other => Left(s"Unbekannte Aktion: $other")
+
+  /** Maps position-zuordnen form fields to [[Edit.AssignItem]]. */
+  private def parseAssignItem(form: Map[String, String]): Either[String, Edit] =
+    val target = form.get("ziel").map(_.trim).filter(_.nonEmpty) match
+      case Some(l) => domain(LeistungId.from(l)).map(Some(_))
+      case None    => Right(None)
+    (offerId(form), positionIndex(form), target).mapN(Edit.AssignItem(_, _, _))
+
+  /** Maps status-setzen form fields to [[Edit.SetCoverage]]. */
+  private def parseSetCoverage(form: Map[String, String]): Either[String, Edit] =
+    val status = field(form, "status").flatMap {
+      case "auto" => Right(None)
+      case code   => Coverage.fromCode(code).map(Some(_)).toRight(s"Unbekannter Status: $code")
     }
+    (offerId(form), leistungId(form, "leistung"), status).mapN(Edit.SetCoverage(_, _, _))
+
+  /** Maps bewertung form fields to [[Edit.RateContractor]]. */
+  private def parseRating(form: Map[String, String]): Either[String, Edit] =
+    val key = field(form, "firma").flatMap(ContractorKey.of(_).toRight("Feld 'firma' fehlt"))
+    val note = form.get("notiz").map(_.trim).getOrElse("")
+    val noteOk = Either.cond(
+      note.length <= Rating.MaxNote,
+      (),
+      s"Notiz zu lang (höchstens ${Rating.MaxNote} Zeichen)"
+    )
+    val rating = noteOk.flatMap(_ =>
+      form.get("sterne").map(_.trim).filter(_.nonEmpty) match
+        case None    => Right(None)
+        case Some(n) =>
+          n.toIntOption
+            .toRight(s"Ungültige Sternezahl: $n")
+            .flatMap(i => domain(Stars.from(i)))
+            .map(st => Some(Rating(st, note)))
+    )
+    (key, rating).mapN(Edit.RateContractor(_, _))
+
+  /** Maps gewichtung form fields to [[Edit.SetWeights]]. */
+  private def parseWeights(form: Map[String, String]): Either[String, Edit] =
+    Criterion.values.toList
+      .traverse(c =>
+        field(form, s"gewicht-${Criterion.code(c)}")
+          .flatMap(_.toIntOption.toRight(s"Ungültige Gewichtung für ${Criterion.label(c)}"))
+          .map(c -> _)
+      )
+      .flatMap(ws => domain(Weights.from(ws.toMap)))
+      .map(Edit.SetWeights(_))
 
   /** Largest file (PDF, 20 MB) plus room for the multipart framing; larger bodies get 413 without
     * being read.
     */
   val MaxRequestBytes: Long = OfferFileType.Pdf.maxBytes.toLong + 64 * 1024
 
+/** HTTP wiring: maps endpoints to repository, file store and HTML pages. */
 final class Api(
     repo: ProjectRepository,
     home: ProjectId,
     extractor: OfferExtractor[IO],
     files: FileStore
 ):
+  /** JSON totals for a project id. [[RepoError.Storage]] → [[ApiError.StorageFailed]]; every other
+    * repository error collapses to [[ApiError.ProjectNotFound]] (including invalid/rejected).
+    */
   private def totalsLogic(raw: String): IO[Either[ApiError, TotalsResponse]] =
     ProjectId.from(raw) match
       case Left(_)   => IO.pure(Left(ApiError.InvalidProjectId(raw)))
@@ -363,6 +287,10 @@ final class Api(
             }
           )
 
+  /** PDF bytes of the Leistungsvergleich. Renders via `IO.blocking(ComparisonPdf.render)`. Render
+    * `Left` becomes [[ApiError.StorageFailed]] (`"pdf-export"`); [[RepoError.Storage]] maps to
+    * StorageFailed; other repository errors collapse to [[ApiError.ProjectNotFound]].
+    */
   private def comparisonPdfLogic(raw: String): IO[Either[ApiError, Array[Byte]]] =
     ProjectId.from(raw) match
       case Left(_)   => IO.pure(Left(ApiError.InvalidProjectId(raw)))
@@ -380,9 +308,11 @@ final class Api(
               .map(_.left.map(_ => ApiError.StorageFailed("pdf-export")))
         }
 
+  /** HTML 404 page for an unknown project or category. */
   private def notFound(what: String): HtmlError =
     HtmlError(StatusCode.NotFound, Pages.message(s"$what nicht gefunden"))
 
+  /** Full HTML error page for a repository failure. */
   private def pageError(e: RepoError): HtmlError = e match
     case RepoError.Storage(code) =>
       HtmlError(
@@ -405,6 +335,7 @@ final class Api(
         ).left.map(pageError)
       )
 
+  /** Renders one category tab (or 404) as a full HTML page. */
   private def categoryPageLogic(
       projectId: String,
       categoryId: String
@@ -423,6 +354,7 @@ final class Api(
             ).left.map(pageError)
           )
 
+  /** htmx error fragment retargeted at `#fehler` with the given status. */
   private def fragmentError(status: StatusCode, text: String): HtmlError =
     HtmlError(status, Pages.errorFragment(text))
 
@@ -436,6 +368,9 @@ final class Api(
     else Right(())
   }
 
+  /** Validates path ids, calls [[ProjectRepository.setFavorite]], returns the project fragment (or
+    * [[repoError]]). CSRF is enforced on the endpoint, not here.
+    */
   private def favoriteLogic(
       projectId: String,
       categoryId: String,
@@ -455,6 +390,9 @@ final class Api(
           case Left(e) => Left(repoError(e))
         }
 
+  /** Validates ids, calls [[ProjectRepository.deleteOffer]] with `files.deleteAll` as cleanup
+    * (cleanup errors ignored inside the repo), returns the project fragment. CSRF on the endpoint.
+    */
   private def deleteOfferLogic(
       projectId: String,
       categoryId: String,
@@ -477,6 +415,9 @@ final class Api(
             Right(Pages.projectFragment(view, Pages.activeCategory(view, Some(c))))
         }
 
+  /** Maps [[RepoError]] to htmx fragments: not-found → 404, ItemNotFound/Invalid → 422, Rejected →
+    * 409, Storage → 500.
+    */
   private def repoError(e: RepoError): HtmlError = e match
     case RepoError.ProjectNotFound(_) =>
       fragmentError(StatusCode.NotFound, "Projekt nicht gefunden")
@@ -514,15 +455,46 @@ final class Api(
             (url, Pages.projectFragment(v, active))
           }.left.map(repoError))
 
+  /** Fresh upload offer id (`upl-` + short UUID). */
   private def newOfferId: IO[Either[DomainError, OfferId]] =
     UUIDGen[IO].randomUUID.map(u => OfferId.from(s"upl-${u.toString.replace("-", "").take(12)}"))
 
+  /** Upload endpoint body: [[validateUpload]], ensure category exists, then [[runUpload]].
+    * Repository errors become htmx fragments via [[repoError]].
+    */
   private def uploadLogic(
       projectId: String,
       categoryId: String,
       form: UploadForm
   ): IO[Either[HtmlError, String]] =
-    val checked = for
+    validateUpload(form, projectId, categoryId) match
+      case Left(e)      => IO.pure(Left(e))
+      case Right(input) =>
+        repo.find(input.project).flatMap {
+          case Left(e) => IO.pure(Left(repoError(e)))
+          case Right(v) if !v.project.categories.exists(_.id == input.category) =>
+            IO.pure(Left(repoError(RepoError.CategoryNotFound(input.category))))
+          case Right(v) => runUpload(v, input)
+        }
+
+  /** Validated upload payload ready for extraction and storage. */
+  private final case class UploadInput(
+      project: ProjectId,
+      category: CategoryId,
+      fileType: OfferFileType,
+      bytes: Array[Byte],
+      fileName: Option[String]
+  )
+
+  /** Pure checks before extract/store: missing file → 400; bad ids → 400; unknown magic → 415; over
+    * [[OfferFileType.maxBytes]] → 413. No disk or extractor I/O.
+    */
+  private def validateUpload(
+      form: UploadForm,
+      projectId: String,
+      categoryId: String
+  ): Either[HtmlError, UploadInput] =
+    for
       datei <- form.datei.toRight(fragmentError(StatusCode.BadRequest, "Keine Datei ausgewählt"))
       bytes = datei.body
       ids <- (for
@@ -545,74 +517,82 @@ final class Api(
           s"Datei zu groß (${fileType.extension.toUpperCase} höchstens ${fileType.maxMegabytes} MB)"
         )
       )
-    yield (ids._1, ids._2, fileType, bytes, datei.fileName)
-    checked match
-      case Left(e)                                  => IO.pure(Left(e))
-      case Right((p, c, fileType, bytes, fileName)) =>
-        repo.find(p).flatMap {
-          case Left(e)                                             => IO.pure(Left(repoError(e)))
-          case Right(v) if !v.project.categories.exists(_.id == c) =>
-            IO.pure(Left(repoError(RepoError.CategoryNotFound(c))))
-          case Right(v) =>
-            val known = v.leistungen.filter(_.category == c)
-            newOfferId.flatMap {
-              case Left(e) =>
-                IO.pure(Left(fragmentError(StatusCode.InternalServerError, Pages.describe(e))))
-              case Right(freshId) =>
-                val name = fileName.getOrElse(s"angebot.${fileType.extension}")
-                // Read first (cancel mid-read leaves no file). Keep/obsolete are decided only
-                // inside addUpload's lock; the file is staged anonymously, then installed on the
-                // kept id under the lock before the txn (prepare), and rolled back if it fails.
-                val read = extractor
-                  .extract(bytes, fileType, known)
-                  .flatMap(extracted =>
-                    Clock[IO].realTimeInstant.map { now =>
-                      val outcome = extracted.fold(
-                        e => UploadOutcome.Failed(Pages.describe(e)),
-                        UploadOutcome.Read(_)
-                      )
-                      Upload(freshId, c, name, fileType, now, outcome)
-                    }
-                  )
-                IO.uncancelable(poll =>
-                  poll(read).flatMap { draft =>
-                    poll(files.stage(bytes)).flatMap { staged =>
-                      // The file is moved into place (old one kept as backup) under addUpload's
-                      // lock before the txn; a failed/canceled txn restores the old file.
-                      val prepare: UploadStored => IO[FileStep] = {
-                        case UploadStored(keep, obsolete) =>
-                          files
-                            .install(staged, keep, fileType)
-                            .map(installed =>
-                              FileStep(
-                                files.rollback(installed),
-                                files.finish(installed) >> obsolete.traverse_(files.deleteAll)
-                              )
-                            )
-                      }
-                      val stored = poll(repo.addUpload(p, draft, prepare)).flatMap {
-                        case Left(e) =>
-                          files.discard(staged).as(Left(e): Either[RepoError, Unit])
-                        case Right(_) => IO.pure(Right(()): Either[RepoError, Unit])
-                      }
-                      stored.guaranteeCase {
-                        case Outcome.Succeeded(_)                    => IO.unit
-                        case Outcome.Errored(_) | Outcome.Canceled() => files.discard(staged)
-                      }
-                    }
-                  }
-                ).flatMap {
-                  case Left(e)   => IO.pure(Left(repoError(e)))
-                  case Right(()) =>
-                    repo
-                      .find(p)
-                      .map(
-                        _.map(v => Pages.projectFragment(v, Pages.activeCategory(v, Some(c)))).left
-                          .map(repoError)
-                      )
-                }
+    yield UploadInput(ids._1, ids._2, fileType, bytes, datei.fileName)
+
+  /** Extracts with the category known Leistungen into a draft [[Upload]] (failed extraction becomes
+    * [[UploadOutcome.Failed]] but is still stored). Cancel mid-extract leaves no staged file. Then
+    * [[storeUpload]].
+    */
+  private def runUpload(view: ProjectView, input: UploadInput): IO[Either[HtmlError, String]] =
+    val known = view.leistungen.filter(_.category == input.category)
+    newOfferId.flatMap {
+      case Left(e) =>
+        IO.pure(Left(fragmentError(StatusCode.InternalServerError, Pages.describe(e))))
+      case Right(freshId) =>
+        val name = input.fileName.getOrElse(s"angebot.${input.fileType.extension}")
+        // Read first (cancel mid-read leaves no file). Keep/obsolete are decided only
+        // inside addUpload's lock; the file is staged anonymously, then installed on the
+        // kept id under the lock before the txn (prepare), and rolled back if it fails.
+        val read = extractor
+          .extract(input.bytes, input.fileType, known)
+          .flatMap(extracted =>
+            Clock[IO].realTimeInstant.map { now =>
+              val outcome = extracted.fold(
+                e => UploadOutcome.Failed(Pages.describe(e)),
+                UploadOutcome.Read(_)
+              )
+              Upload(freshId, input.category, name, input.fileType, now, outcome)
             }
+          )
+        storeUpload(input.project, input.category, input.bytes, input.fileType, read)
+    }
+
+  /** Stages bytes, then under `IO.uncancelable` runs [[ProjectRepository.addUpload]] whose
+    * `prepare` installs the staged file (rollback on txn fail/cancel; finish deletes backups and
+    * obsolete files). Discards the staged file on repo failure or fiber cancel; returns the
+    * fragment.
+    */
+  private def storeUpload(
+      project: ProjectId,
+      category: CategoryId,
+      bytes: Array[Byte],
+      fileType: OfferFileType,
+      read: IO[Upload]
+  ): IO[Either[HtmlError, String]] =
+    IO.uncancelable(poll =>
+      poll(read).flatMap { draft =>
+        poll(files.stage(bytes)).flatMap { staged =>
+          val prepare: UploadStored => IO[FileStep] = { case UploadStored(keep, obsolete) =>
+            files
+              .install(staged, keep, fileType)
+              .map(installed =>
+                FileStep(
+                  files.rollback(installed),
+                  files.finish(installed) >> obsolete.traverse_(files.deleteAll)
+                )
+              )
+          }
+          val stored = poll(repo.addUpload(project, draft, prepare)).flatMap {
+            case Left(e) =>
+              files.discard(staged).as(Left(e): Either[RepoError, Unit])
+            case Right(_) => IO.pure(Right(()): Either[RepoError, Unit])
+          }
+          stored.guaranteeCase {
+            case Outcome.Succeeded(_)                    => IO.unit
+            case Outcome.Errored(_) | Outcome.Canceled() => files.discard(staged)
+          }
         }
+      }
+    ).flatMap {
+      case Left(e)   => IO.pure(Left(repoError(e)))
+      case Right(()) =>
+        repo
+          .find(project)
+          .map(
+            _.map(v => Pages.projectFragment(v, Pages.activeCategory(v, Some(category)))).left
+              .map(repoError)
+          )
+    }
 
   private val defaultDecodeFailures: DefaultDecodeFailureHandler[IO] =
     DefaultDecodeFailureHandler[IO]
@@ -630,6 +610,8 @@ final class Api(
 
   /** htmx endpoints get fragments, all others tapir's default responses. */
   private val decodeFailureHandler: DecodeFailureHandler[IO] = new DecodeFailureHandler[IO]:
+    /** Tapir decode-failure handler: htmx fragments for edit/upload endpoints, default otherwise.
+      */
     def apply(ctx: DecodeFailureContext)(implicit
         monad: MonadError[IO]
     ): IO[Option[ValuedEndpointOutput[?]]] =

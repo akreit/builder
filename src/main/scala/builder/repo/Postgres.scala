@@ -18,7 +18,9 @@ import java.net.URI
 /** A Postgres SQLSTATE (five characters, e.g. `23503` for a foreign key violation). */
 opaque type SqlState = String
 
+/** Construction and access for [[SqlState]]. */
 object SqlState:
+  /** Wraps a five-character SQLSTATE code. */
   def apply(code: String): SqlState = code
   extension (s: SqlState) def value: String = s
 
@@ -26,6 +28,7 @@ object SqlState:
   * transaction.
   */
 final case class Stmt[A](command: Command[A], args: A):
+  /** Executes this statement on an open Skunk session. */
   private[repo] def run(s: Session[IO]): IO[Unit] = s.prepare(command).flatMap(_.execute(args)).void
 
 /** Why a database configuration could not be read from the environment. */
@@ -41,8 +44,10 @@ final case class DbConfig(
     password: Option[String],
     database: String
 ):
+  /** Connection summary without the password. */
   override def toString: String = s"postgres://$user@$host:$port/$database"
 
+/** Reads [[DbConfig]] from environment variables. */
 object DbConfig:
   /** `DATABASE_URL` (`postgres://user:pass@host:port/db`) or `DATABASE_HOST`, `DATABASE_PORT`
     * (default 5432), `DATABASE_USER`, `DATABASE_PASSWORD`, `DATABASE_NAME`.
@@ -51,6 +56,7 @@ object DbConfig:
     env.get("DATABASE_URL").filter(_.nonEmpty) match
       case Some(url) => fromUrl(url)
       case None      =>
+        /** Reads a required non-empty environment variable. */
         def required(k: String) =
           env.get(k).filter(_.nonEmpty).toRight(DbConfigError.Missing(k))
         for
@@ -65,6 +71,7 @@ object DbConfig:
           name <- required("DATABASE_NAME")
         yield DbConfig(host, port, user, env.get("DATABASE_PASSWORD").filter(_.nonEmpty), name)
 
+  /** Parses `postgres://user:pass@host:port/db` into [[DbConfig]]. */
   private def fromUrl(url: String): Either[DbConfigError, DbConfig] =
     val invalid =
       DbConfigError.Invalid("DATABASE_URL", "erwartet postgres://user:pass@host:port/db")
@@ -89,6 +96,7 @@ object DbConfig:
   * so callers show a storage error instead of crashing.
   */
 final class Postgres private (pool: Resource[IO, Session[IO]]):
+  /** Runs an effect, mapping Skunk/Postgres failures to [[RepoError.Storage]]. */
   private def run[A](io: IO[A]): IO[Either[RepoError, A]] =
     io.attempt.flatMap {
       case Right(a)                        => IO.pure(Right(a))
@@ -131,6 +139,7 @@ final class Postgres private (pool: Resource[IO, Session[IO]]):
       )
     )
 
+/** Skunk session pool, transaction helpers and schema migration runner. */
 object Postgres:
   given Tracer[IO] = Tracer.Implicits.noop
   given Meter[IO] = Meter.Implicits.noop

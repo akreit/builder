@@ -10,14 +10,21 @@ import scalatags.Text.tags2
 
 /** The ranking (Rangliste) of a category. */
 object RankingSection:
+  /** Formats criterion points for display. */
   private[ui] def points(d: BigDecimal): String = Format.decimal(d)
+
+  /** Cell content for one criterion score (points or unavailable reason). */
   private[ui] def criterionCell(cs: CriterionScore): Frag = cs.result match
     case CriterionResult.Scored(p, detail) =>
       td(cls := "betrag")(strong(s"${points(p)} Pkt."), div(cls := "seite")(detail))
     case CriterionResult.NotAvailable(reason) =>
       td(cls := "betrag pruefen")(strong(reason))
+
+  /** Stars/note form for a ranked contractor, when the firm is known. */
   private[ui] def ratingForm(project: Project, e: RankedOffer): Frag =
     e.firm.fold[Frag](span(cls := "hinweis")("Firma nicht erkannt"))(_ => ratingFields(project, e))
+
+  /** Form fields of the rating editor. */
   private[ui] def ratingFields(project: Project, e: RankedOffer): Frag =
     editForm(project, List("aktion" -> "bewertung", "firma" -> e.contractor), auto = false)(
       select(name := "sterne", attr("aria-label") := s"Sterne für ${e.contractor}")(
@@ -42,6 +49,8 @@ object RankingSection:
       ),
       button(tpe := "submit")("Speichern")
     )
+
+  /** One ranking table row (rank, contractor, criteria, total, rating). */
   private[ui] def rankingRow(project: Project, rank: Option[Int], e: RankedOffer): Frag =
     tr(attr("data-firma") := e.contractor)(
       td(rank.fold("–")(r => s"$r.")),
@@ -71,6 +80,8 @@ object RankingSection:
       e.criteria.map(criterionCell),
       td(ratingForm(project, e))
     )
+
+  /** Ranking section for a category: table plus weight-driven scores. */
   private[ui] def rankingSection(view: ProjectView, category: Category): Frag =
     val project = view.project
     val r =

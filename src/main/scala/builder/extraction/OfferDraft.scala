@@ -15,20 +15,26 @@ enum Issue:
 
 /** Validates a [[RawOffer]] with the domain smart constructors, collecting every problem. */
 object OfferDraft:
+  /** Validation result that accumulates every [[Issue]] instead of stopping at the first. */
   type Checked[A] = Either[NonEmptyList[Issue], A]
 
+  /** Attaches page/confidence from the field to a parsed value. */
   private def extracted[A](f: Field, a: A): Extracted[A] = Extracted(a, f.pageNumber, f.confidence)
 
+  /** Requires non-empty field text; otherwise [[Issue.Missing]]. */
   private def required(label: String, f: Field): Checked[String] =
     f.text.toRight(NonEmptyList.one(Issue.Missing(label)))
 
+  /** Parses a decimal string; failure is [[Issue.Unreadable]]. */
   private def decimal(label: String, s: String): Checked[BigDecimal] =
     Try(BigDecimal(s.replace(" ", ""))).toOption
       .toRight(NonEmptyList.one(Issue.Unreadable(label, s)))
 
+  /** Lifts a domain [[Either]] into [[Checked]], tagging [[Issue.Invalid]]. */
   private def domain[A](label: String, e: Either[DomainError, A]): Checked[A] =
     e.left.map(err => NonEmptyList.one(Issue.Invalid(label, err)))
 
+  /** Parses a money field in `cur` with page/confidence preserved. */
   private def money(label: String, f: Field, cur: Currency): Checked[Extracted[Money]] =
     for
       s <- required(label, f)
@@ -36,11 +42,14 @@ object OfferDraft:
       m <- domain(label, Money.fromDecimal(d, cur).left.map(DomainError.InvalidMoney(_)))
     yield extracted(f, m)
 
+  /** Parses an ISO date string into [[LocalDate]]. */
   private def date(label: String, s: String): Checked[LocalDate] =
     Try(LocalDate.parse(s)).toOption.toRight(NonEmptyList.one(Issue.Unreadable(label, s)))
 
+  /** Optional extracted text when the field has content. */
   private def optionalText(f: Field): Option[Extracted[String]] = f.text.map(extracted(f, _))
 
+  /** Optional extracted date; absent text stays `None` without an issue. */
   private def optionalDate(label: String, f: Field): Checked[Option[Extracted[LocalDate]]] =
     f.text.traverse(s => date(label, s).map(extracted(f, _)))
 
@@ -68,6 +77,7 @@ object OfferDraft:
           m <- domain(label, Money.fromDecimal(d, cur).left.map(DomainError.InvalidMoney(_)))
         yield PriceInfo.Known(extracted(f, m))
 
+  /** Validates one raw line item (quantity/prices) into a domain [[LineItem]]. */
   private def lineItem(n: Int, li: RawLineItem, cur: Currency): Checked[LineItem] =
     val p = s"Position $n"
     (

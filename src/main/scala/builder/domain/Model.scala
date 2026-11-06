@@ -5,25 +5,38 @@ import scala.util.Try
 
 private val IdPattern = "[A-Za-z0-9][A-Za-z0-9_-]{0,63}".r
 
+/** Shared id grammar (`[A-Za-z0-9][A-Za-z0-9_-]{0,63}`); `kind` names the error. */
 private def validId(kind: String, raw: String): Either[DomainError, String] =
   Either.cond(IdPattern.matches(raw), raw, DomainError.InvalidId(kind, raw))
 
+/** Stable id of a renovation project. */
 opaque type ProjectId = String
+
+/** Smart constructor for [[ProjectId]]. */
 object ProjectId:
+  /** Smart constructor for project ids. */
   def from(raw: String): Either[DomainError, ProjectId] = validId("project", raw)
   extension (id: ProjectId) def value: String = id
 
+/** Stable id of an uploaded offer within a project. */
 opaque type OfferId = String
+
+/** Smart constructor for [[OfferId]]. */
 object OfferId:
+  /** Smart constructor for offer ids. */
   def from(raw: String): Either[DomainError, OfferId] = validId("offer", raw)
   extension (id: OfferId) def value: String = id
 
 /** VAT rate in percent, e.g. 19 or 7. */
 opaque type VatRate = BigDecimal
+
+/** Smart constructor and VAT calculation for [[VatRate]]. */
 object VatRate:
+  /** Smart constructor: VAT percent in 0–100 inclusive. */
   def from(percent: BigDecimal): Either[DomainError, VatRate] =
     Either.cond(percent >= 0 && percent <= 100, percent, DomainError.InvalidVatRate(percent))
   extension (r: VatRate)
+    /** Underlying percent value of this rate. */
     def percent: BigDecimal = r
 
     /** VAT on `net`, rounded HALF_UP to the currency's minor unit. The single rounding rule used
@@ -37,11 +50,15 @@ object VatRate:
 
 /** Strictly positive quantity of a line item. */
 opaque type Quantity = BigDecimal
+
+/** Smart constructor for positive [[Quantity]]. */
 object Quantity:
+  /** Smart constructor: quantity must be strictly positive. */
   def from(value: BigDecimal): Either[DomainError, Quantity] =
     Either.cond(value > 0, value, DomainError.InvalidQuantity(value))
   extension (q: Quantity) def value: BigDecimal = q
 
+/** Safe calendar dates at the Java `LocalDate` boundary. */
 object Dates:
   /** `LocalDate.of` fails on invalid input; keep that at the Java boundary. */
   def of(year: Int, month: Int, day: Int): Either[DomainError, LocalDate] =
@@ -49,14 +66,21 @@ object Dates:
       DomainError.InvalidDate(year, month, day)
     )
 
+/** Stable id of a project category (trade). */
 opaque type CategoryId = String
+
+/** Smart constructor for [[CategoryId]]. */
 object CategoryId:
+  /** Smart constructor for category ids. */
   def from(raw: String): Either[DomainError, CategoryId] = validId("category", raw)
   extension (id: CategoryId) def value: String = id
 
 /** Human-readable category name, trimmed and non-empty (e.g. "Dämmung"). */
 opaque type CategoryName = String
+
+/** Smart constructor for non-empty [[CategoryName]]. */
 object CategoryName:
+  /** Trims and rejects blank category names. */
   def from(raw: String): Either[DomainError, CategoryName] =
     val trimmed = raw.trim
     Either.cond(trimmed.nonEmpty, trimmed, DomainError.InvalidCategoryName(raw))
@@ -65,8 +89,10 @@ object CategoryName:
 /** A project-specific category (trade) that offers, favorites and work packages belong to. */
 final case class Category(id: CategoryId, name: CategoryName)
 
+/** Planned work within a category (description and areas), not an offer. */
 final case class WorkPackage(category: CategoryId, description: String, areas: List[String])
 
+/** Contractor firm name as shown on an offer. */
 final case class Contractor(name: String)
 
 /** Quantity of a line item: known from the document, or missing (offer may still be accepted). */
@@ -98,7 +124,9 @@ final case class LineItem private (
     total: PriceInfo
 )
 
+/** Validated construction of [[LineItem]] (price × quantity rules). */
 object LineItem:
+  /** Validates line prices/quantity rules and builds a [[LineItem]]. */
   def from(
       description: Extracted[String],
       quantity: QuantityInfo,
@@ -191,10 +219,13 @@ final case class Offer private (
         List(li.unitPrice, li.total).collect { case PriceInfo.Known(e) => e.value }
       )
 
+/** Validated construction of [[Offer]] (gross/VAT/line-sum rules). */
 object Offer:
+  /** Rejects a negative amount with a German field label. */
   private def nonNegative(field: String, m: Money): Either[DomainError, Money] =
     Either.cond(!m.isNegative, m, DomainError.NegativeAmount(field, m))
 
+  /** When every line has a total, checks that those totals sum to net (Pauschalangebot skips). */
   private def checkLineItems(n: Money, lineItems: List[LineItem]): Either[DomainError, Unit] =
     lineItems match
       case Nil              => Right(()) // Pauschalangebot: only the lump sum is given
@@ -286,10 +317,13 @@ final case class Project private (
       favorites + (category -> offer)
     )
 
+/** Validated construction of [[Project]] (ids, refs, currency, favorites). */
 object Project:
+  /** First duplicated value in the list, if any. */
   private def firstDuplicate[A](values: List[A]): Option[A] =
     values.groupBy(identity).collectFirst { case (a, as) if as.sizeIs > 1 => a }
 
+  /** Ensures every referenced category id exists in `known`. */
   private def checkRefs(
       known: Set[CategoryId],
       kind: String,
@@ -300,12 +334,14 @@ object Project:
       .map(r => DomainError.UnknownCategory(kind, r.value))
       .toLeft(())
 
+  /** Ensures every amount on the offer uses the project currency. */
   private def checkCurrency(expected: Currency, o: Offer): Either[DomainError, Unit] =
     o.amounts
       .find(_.currency != expected)
       .map(m => DomainError.OfferCurrencyMismatch(o.id.value, expected, m.currency))
       .toLeft(())
 
+  /** Ensures a favorite points at an offer of its own category. */
   private def checkFavorite(
       offers: List[Offer],
       category: CategoryId,
@@ -317,6 +353,9 @@ object Project:
       DomainError.FavoriteNotInCategory(category.value, fav.value)
     )
 
+  /** Validates uniqueness, category refs, currency and favorites; the only way to build a
+    * [[Project]].
+    */
   def from(
       id: ProjectId,
       name: String,

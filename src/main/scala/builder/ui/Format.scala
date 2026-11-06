@@ -10,6 +10,7 @@ import java.util.Locale
 
 /** German display formats: `12.500,00 €`, `15.09.2026`. */
 object Format:
+  /** Currency symbol used in German money formatting. */
   private def symbol(c: Currency): String = c match
     case Currency.EUR => "€"
     case Currency.CHF => "CHF"
@@ -21,6 +22,8 @@ object Format:
       DecimalFormatSymbols.getInstance(Locale.GERMANY)
     )
 
+  /** German grouping/decimal (Locale.GERMANY) plus [[symbol]]; uses a fresh DecimalFormat per call.
+    */
   def money(m: Money): String =
     s"${pattern(m.currency.minorDigits).format(m.toDecimal.bigDecimal)} ${symbol(m.currency)}"
 
@@ -29,4 +32,5 @@ object Format:
   /** Score with one decimal, German style ("87,5"). */
   def decimal(d: BigDecimal): String = pattern(1).format(d.bigDecimal)
 
+  /** Formats as `dd.MM.yyyy` (fixed German pattern). */
   def date(d: LocalDate): String = dateFormat.format(d)

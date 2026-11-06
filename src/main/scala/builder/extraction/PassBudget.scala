@@ -27,6 +27,7 @@ final case class PassBudget(
   /** Characters of document text that fit next to `prompt` (instructions + category context). */
   def documentChars(prompt: String): Int = (inputTokens - tokens(prompt)).max(1) * charsPerToken
 
+/** Default token/character budgets for multi-pass extraction. */
 object PassBudget:
   val default: PassBudget = PassBudget(
     contextTokens = 200000,
@@ -40,7 +41,10 @@ object PassBudget:
   * page numbers are never lost.
   */
 final case class TextChunk(index: Int, total: Int, pages: List[PdfPage]):
+  /** First PDF page number in this chunk, or 0 when empty. */
   def firstPage: Int = pages.headOption.fold(0)(_.number)
+
+  /** Last PDF page number in this chunk, or 0 when empty. */
   def lastPage: Int = pages.lastOption.fold(0)(_.number)
 
   /** Document text as sent to Claude: every page under a `=== Seite n ===` marker. */
@@ -62,8 +66,12 @@ object Chunking:
     val groups = pack(pages.flatMap(split(_, maxChars)), maxChars, maxPages)
     groups.zipWithIndex.map((g, i) => TextChunk(i + 1, groups.size, g))
 
+  /** Character length of a page's extracted text. */
   private def size(p: PdfPage): Int = p.text.length
 
+  /** Packs pages into chunks that stay within character and page limits (never splits a fitting
+    * page).
+    */
   private def pack(pages: List[PdfPage], maxChars: Int, maxPages: Int): List[List[PdfPage]] =
     pages
       .foldLeft(List.empty[List[PdfPage]]) {

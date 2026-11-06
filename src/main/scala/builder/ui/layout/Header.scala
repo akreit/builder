@@ -11,5 +11,6 @@ object Header:
   def title(projectName: Option[String]): String =
     projectName.map(_.trim).filter(_.nonEmpty).map(n => s"Projekt $n").getOrElse(AppName)
 
+  /** Top bar showing the project name, or the app name outside a project. */
   private[ui] def bar(projectName: Option[String]): Frag =
     header(cls := "kopfzeile", id := "kopfzeile")(a(href := "/")(title(projectName)))

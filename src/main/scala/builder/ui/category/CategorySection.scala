@@ -15,6 +15,7 @@ import scalatags.Text.tags2
 
 /** The section of one category and its running total. */
 object CategorySection:
+  /** Full category block: status, offers, uploads, matrix and ranking. */
   private[ui] def categorySection(view: ProjectView, ct: CategoryTotal): Frag =
     val project = view.project
     val uploads = view.uploads.filter(_.upload.category == ct.category.id)
@@ -42,6 +43,8 @@ object CategorySection:
       rankingSection(view, ct.category),
       uploadForm(project, ct.category)
     )
+
+  /** Running-total strip for one category. */
   private[ui] def categoryTotal(ct: CategoryTotal): Frag =
     tags2.section(cls := "summe", id := "kategorie-summe")(
       h3(s"Summe ${ct.category.name.value}"),

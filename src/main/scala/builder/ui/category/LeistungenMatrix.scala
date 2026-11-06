@@ -15,16 +15,21 @@ import scalatags.Text.tags2
   * [[OfferDetail.collapsiblePositions]].
   */
 object LeistungenMatrix:
+  /** German label for a coverage status. */
   private[ui] def coverageLabel(c: Coverage): String = c match
     case Coverage.Enthalten      => "enthalten"
     case Coverage.NichtEnthalten => "nicht enthalten"
     case Coverage.Ausgeschlossen => "ausgeschlossen"
     case Coverage.Unklar         => "unklar"
+
+  /** CSS class for a coverage status. */
   private[ui] def coverageClass(c: Coverage): String = c match
     case Coverage.Enthalten      => "st-enthalten"
     case Coverage.NichtEnthalten => "st-nicht"
     case Coverage.Ausgeschlossen => "st-ausgeschlossen"
     case Coverage.Unklar         => "st-unklar"
+
+  /** Short German explanation of where a coverage value came from. */
   private[ui] def sourceText(s: CoverageSource): String = s match
     case CoverageSource.Read(page, conf) =>
       page.fold("ohne Seite")(p => s"S. ${p.value}") + (conf match
@@ -34,6 +39,8 @@ object LeistungenMatrix:
     case CoverageSource.FromItems => "aus Positionen"
     case CoverageSource.Manual    => "manuell"
     case CoverageSource.Unknown   => "nicht erkannt"
+
+  /** Offer column title (contractor label or file name). */
   private[ui] def columnTitle(c: MatrixColumn): String =
     val label = OfferLabel.display(c.raw)
     if label.nonEmpty then label else c.upload.upload.fileName
@@ -60,6 +67,7 @@ object LeistungenMatrix:
           OfferDetail.collapsiblePositions(all, cur)
         )
 
+  /** One matrix cell: coverage control, price, flags and positions. */
   private[ui] def matrixCell(project: Project, col: MatrixColumn, l: Leistung, c: Cell): Frag =
     val chosen = c.source match
       case CoverageSource.Manual => Coverage.code(c.coverage)
@@ -101,6 +109,8 @@ object LeistungenMatrix:
         )
       )
     )
+
+  /** Leistung row header with rename/merge/delete controls. */
   private[ui] def leistungHeader(project: Project, l: Leistung, others: List[Leistung]): Frag =
     th(cls := "leistung", attr("data-leistung") := l.id.value)(
       l.name.value,
@@ -158,11 +168,11 @@ object LeistungenMatrix:
       }
     )
 
+  /** Leistungsvergleich section for one category (table, assignments, add forms). */
   private[ui] def leistungenSection(view: ProjectView, category: Category): Frag =
     val project = view.project
     val m = Matrix.build(view, category.id)
     val leistungen = m.rows.map(_.leistung)
-    // Assignment controls for offers uploaded to this category only; Ziel may be any category.
     val nativeColumns = m.columns.filter(_.upload.upload.category == category.id)
     tags2.section(cls := "leistungen", attr("data-kategorie") := category.id.value)(
       h3("Leistungsvergleich"),
@@ -173,114 +183,143 @@ object LeistungenMatrix:
         p(cls := "hinweis")(
           "Noch keine Leistungen – sie werden beim ersten hochgeladenen Angebot erkannt."
         )
-      else
-        table(cls := "matrix")(
-          thead(tr(th("Leistung"), m.columns.map(c => th(columnTitle(c))))),
-          tbody(
-            m.rows.map(r =>
-              tr(
-                leistungHeader(project, r.leistung, leistungen.filterNot(_.id == r.leistung.id)),
-                m.columns.zip(r.cells).map((col, c) => matrixCell(project, col, r.leistung, c))
-              )
-            ),
-            if m.unassigned.isEmpty then frag()
-            else
-              tr(cls := "nicht-zugeordnet")(
-                th("Nicht zugeordnet"),
-                m.columns.map(col =>
-                  td(
-                    m.unassigned
-                      .filter(_.offer == col.upload.upload.id)
-                      .map(u => div(cls := "pruefen")(s"Pos. ${u.item + 1}: ${u.description}"))
-                  )
-                )
-              )
-          ),
-          tfoot(
-            tr(cls := "summen")(
-              th("Summe Zellen + nicht zugeordnet"),
-              m.totals.map(t =>
-                td(
-                  cls := (if t.mismatch then "betrag pruefen" else "betrag"),
-                  attr("data-abweichung") := t.mismatch.toString
-                )(
-                  t.sum.map(Format.money).getOrElse("nicht lesbar"),
-                  div(cls := "hinweis")(
-                    s"Netto laut Angebot: ${t.net.map(Format.money).getOrElse("nicht lesbar")}"
-                  ),
-                  if t.mismatch then div("Weicht vom Netto ab – Zuordnung prüfen") else frag()
-                )
-              )
-            )
+      else matrixTable(project, m, leistungen),
+      droppedWarnings(m),
+      assignmentDetails(view, project, nativeColumns),
+      addLeistungForm(project, category),
+      addCategoryInComparison(project)
+    )
+
+  /** HTML table of Leistungen × offers including unassigned and footer sums. */
+  private def matrixTable(project: Project, m: Matrix, leistungen: List[Leistung]): Frag =
+    table(cls := "matrix")(
+      thead(tr(th("Leistung"), m.columns.map(c => th(columnTitle(c))))),
+      tbody(
+        m.rows.map(r =>
+          tr(
+            leistungHeader(project, r.leistung, leistungen.filterNot(_.id == r.leistung.id)),
+            m.columns.zip(r.cells).map((col, c) => matrixCell(project, col, r.leistung, c))
           )
+        ),
+        if m.unassigned.isEmpty then frag()
+        else unassignedRow(m)
+      ),
+      tfoot(totalsRow(m))
+    )
+
+  /** Footer-style row listing unassigned positions per offer. */
+  private def unassignedRow(m: Matrix): Frag =
+    tr(cls := "nicht-zugeordnet")(
+      th("Nicht zugeordnet"),
+      m.columns.map(col =>
+        td(
+          m.unassigned
+            .filter(_.offer == col.upload.upload.id)
+            .map(u => div(cls := "pruefen")(s"Pos. ${u.item + 1}: ${u.description}"))
         )
-      ,
+      )
+    )
+
+  /** Column total cells with mismatch highlighting. */
+  private def totalsRow(m: Matrix): Frag =
+    tr(cls := "summen")(
+      th("Summe Zellen + nicht zugeordnet"),
+      m.totals.map(t =>
+        td(
+          cls := (if t.mismatch then "betrag pruefen" else "betrag"),
+          attr("data-abweichung") := t.mismatch.toString
+        )(
+          t.sum.map(Format.money).getOrElse("nicht lesbar"),
+          div(cls := "hinweis")(
+            s"Netto laut Angebot: ${t.net.map(Format.money).getOrElse("nicht lesbar")}"
+          ),
+          if t.mismatch then div("Weicht vom Netto ab – Zuordnung prüfen") else frag()
+        )
+      )
+    )
+
+  /** Warnings when the extractor dropped Leistungsvorschläge beyond the cap. */
+  private def droppedWarnings(m: Matrix): Frag =
+    frag(
       m.columns.zip(m.dropped).collect {
         case (col, n) if n > 0 =>
           p(cls := "pruefen verworfen")(
             s"${columnTitle(col)}: $n weitere Leistungsvorschläge verworfen " +
               s"(höchstens ${LeistungPlan.MaxNew} neue je Angebot)."
           )
-      },
-      if nativeColumns.isEmpty then frag()
-      else
-        tag("details")(cls := "zuordnung")(
-          tag("summary")("Positionen zuordnen"),
-          p(cls := "hinweis")(
-            "Ziel-Leistung darf aus jeder Kategorie kommen (manuelle Gruppenbildung)."
-          ),
-          nativeColumns.map { col =>
-            val assigned = Matrix.effective(view.assignments)
-            div(
-              h4(columnTitle(col)),
-              table(
-                col.raw.lineItems.zipWithIndex.map((li, i) =>
-                  val current = assigned.get((col.upload.upload.id, i)).flatten
-                  tr(
-                    td(s"${i + 1}. ${li.description.value.getOrElse("")}"),
-                    td(cls := "betrag")(li.total.value.getOrElse("")),
-                    td(
-                      editForm(
-                        project,
-                        List(
-                          "aktion" -> "position-zuordnen",
-                          "angebot" -> col.upload.upload.id.value,
-                          "position" -> (i + 1).toString
-                        ),
-                        auto = true
-                      )(
-                        select(
-                          name := "ziel",
-                          attr("aria-label") := s"Leistung für Position ${i + 1}"
-                        )(zielOptions(view, current))
-                      )
-                    )
-                  )
-                )
+      }*
+    )
+
+  /** Collapsible manual assignment UI for native-category offers. */
+  private def assignmentDetails(
+      view: ProjectView,
+      project: Project,
+      nativeColumns: List[MatrixColumn]
+  ): Frag =
+    if nativeColumns.isEmpty then frag()
+    else
+      tag("details")(cls := "zuordnung")(
+        tag("summary")("Positionen zuordnen"),
+        p(cls := "hinweis")(
+          "Ziel-Leistung darf aus jeder Kategorie kommen (manuelle Gruppenbildung)."
+        ),
+        nativeColumns.map(col => assignmentColumn(view, project, col))
+      )
+
+  /** Assignment table for one offer column. */
+  private def assignmentColumn(view: ProjectView, project: Project, col: MatrixColumn): Frag =
+    val assigned = Matrix.effective(view.assignments)
+    div(
+      h4(columnTitle(col)),
+      table(
+        col.raw.lineItems.zipWithIndex.map((li, i) =>
+          val current = assigned.get((col.upload.upload.id, i)).flatten
+          tr(
+            td(s"${i + 1}. ${li.description.value.getOrElse("")}"),
+            td(cls := "betrag")(li.total.value.getOrElse("")),
+            td(
+              editForm(
+                project,
+                List(
+                  "aktion" -> "position-zuordnen",
+                  "angebot" -> col.upload.upload.id.value,
+                  "position" -> (i + 1).toString
+                ),
+                auto = true
+              )(
+                select(
+                  name := "ziel",
+                  attr("aria-label") := s"Leistung für Position ${i + 1}"
+                )(zielOptions(view, current))
               )
             )
-          }
+          )
         )
-      ,
-      editForm(
-        project,
-        List("aktion" -> "leistung-neu", "kategorie" -> category.id.value),
-        auto = false
-      )(
-        input(
-          name := "name",
-          placeholder := "Neue Leistung",
-          attr("aria-label") := "Neue Leistung"
-        ),
-        button(tpe := "submit")("Leistung hinzufügen")
-      ),
-      // Manual category creation inside the comparison view (owner: group lines across categories).
-      editForm(project, List("aktion" -> "kategorie-neu"), auto = false)(
-        input(
-          name := "name",
-          placeholder := "Neue Kategorie",
-          attr("aria-label") := "Neue Kategorie im Vergleich"
-        ),
-        button(tpe := "submit")("Kategorie hinzufügen")
       )
+    )
+
+  /** Form to add a Leistung in this category. */
+  private def addLeistungForm(project: Project, category: Category): Frag =
+    editForm(
+      project,
+      List("aktion" -> "leistung-neu", "kategorie" -> category.id.value),
+      auto = false
+    )(
+      input(
+        name := "name",
+        placeholder := "Neue Leistung",
+        attr("aria-label") := "Neue Leistung"
+      ),
+      button(tpe := "submit")("Leistung hinzufügen")
+    )
+
+  /** Form to add a category from inside the comparison view. */
+  private def addCategoryInComparison(project: Project): Frag =
+    editForm(project, List("aktion" -> "kategorie-neu"), auto = false)(
+      input(
+        name := "name",
+        placeholder := "Neue Kategorie",
+        attr("aria-label") := "Neue Kategorie im Vergleich"
+      ),
+      button(tpe := "submit")("Kategorie hinzufügen")
     )

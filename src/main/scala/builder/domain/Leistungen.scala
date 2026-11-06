@@ -2,13 +2,19 @@ package builder.domain
 
 /** Id of a Leistung (a coarse work step of a category, e.g. "Gerüst" or "Neu decken"). */
 opaque type LeistungId = String
+
+/** Smart constructor for [[LeistungId]]. */
 object LeistungId:
+  /** Smart constructor using the shared domain id grammar. */
   def from(raw: String): Either[DomainError, LeistungId] = validId("leistung", raw)
   extension (id: LeistungId) def value: String = id
 
 /** Display name of a Leistung, trimmed and non-empty. */
 opaque type LeistungName = String
+
+/** Smart constructor for [[LeistungName]]. */
 object LeistungName:
+  /** Trims and rejects empty or overlong names (max 80 characters). */
   def from(raw: String): Either[DomainError, LeistungName] =
     val trimmed = raw.trim
     Either.cond(
@@ -30,6 +36,7 @@ enum Coverage:
   case Ausgeschlossen
   case Unklar
 
+/** Wire codes for [[Coverage]] used in JSON, DB and forms. */
 object Coverage:
   /** Wire names used in the extractor JSON, the database and form values. */
   def code(c: Coverage): String = c match
@@ -38,6 +45,7 @@ object Coverage:
     case Ausgeschlossen => "ausgeschlossen"
     case Unklar         => "unklar"
 
+  /** Parses a coverage wire code; unknown codes yield `None`. */
   def fromCode(s: String): Option[Coverage] = values.find(code(_) == s.trim.toLowerCase)
 
 /** Where a coverage status comes from. */

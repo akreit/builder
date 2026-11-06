@@ -8,6 +8,7 @@ import scalatags.Text.tags2
 
 /** Weights of the ranking criteria. */
 object WeightsForm:
+  /** Form to edit ranking criterion weights for the project. */
   private[ui] def weightsForm(view: ProjectView): Frag =
     tags2.section(cls := "gewichtung", id := "gewichtung")(
       h2("Gewichtung der Rangliste"),

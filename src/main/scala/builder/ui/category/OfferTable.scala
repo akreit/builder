@@ -9,12 +9,15 @@ import scalatags.Text.all.*
 
 /** Offer rows of a category, with favorite and delete actions. */
 object OfferTable:
+  /** htmx POST URL that marks this offer as favorite. */
   private[ui] def favoriteUrl(project: Project, category: Category, offer: Offer): String =
     s"/ui/projects/${project.id.value}/categories/${category.id.value}/favorite/${offer.id.value}"
 
+  /** htmx POST URL that deletes this offer. */
   private[ui] def deleteUrl(project: Project, category: Category, offerId: OfferId): String =
     s"/ui/projects/${project.id.value}/categories/${category.id.value}/angebote/${offerId.value}/loeschen"
 
+  /** One offer row: contractor, amounts, favorite and delete controls. */
   private[ui] def offerRow(
       project: Project,
       category: Category,

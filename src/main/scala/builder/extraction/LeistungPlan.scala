@@ -19,6 +19,7 @@ final case class LeistungPlan(
     coverage: List[ReadCoverage]
 )
 
+/** Builds a [[LeistungPlan]] from extractor output and known Leistungen. */
 object LeistungPlan:
   /** At most this many new Leistungen are taken from one extraction; the rest are dropped. */
   val MaxNew: Int = 10
@@ -30,6 +31,7 @@ object LeistungPlan:
   /** How many proposals of `raw` were dropped by the cap. */
   def dropped(raw: RawOffer): Int = (raw.neueLeistungen.getOrElse(Nil).size - MaxNew).max(0)
 
+  /** Case-insensitive trim used when matching Leistung names. */
   private def norm(s: String): String = s.trim.toLowerCase
 
   /** Resolves the extractor's references against the category's `known` Leistungen. A proposed
@@ -59,6 +61,8 @@ object LeistungPlan:
                     case None => (acc, keys, ids)
       }
     val byId = known.map(l => l.id.value -> l.id).toMap
+
+    /** Maps an extractor reference (id or proposed key) onto a known or planned Leistung id. */
     def resolve(ref: String): Option[LeistungId] =
       byId.get(ref.trim).orElse(keys.get(ref.trim))
     val coverage = raw.abdeckung

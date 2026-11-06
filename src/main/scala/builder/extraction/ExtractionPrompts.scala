@@ -13,6 +13,7 @@ enum PromptLoadError extends Exception:
   case Missing(path: String)
   case Unreadable(path: String, detail: String)
 
+  /** Log-safe message identifying the resource and failure kind (no file bytes). */
   override def getMessage: String = this match
     case Missing(path)            => s"Missing prompt resource: $path"
     case Unreadable(path, detail) => s"Unreadable prompt resource: $path ($detail)"
@@ -27,12 +28,14 @@ final case class ExtractionPrompts(
   /** Header of a text pass: where the text comes from and how page markers work. */
   def documentPartText(chunk: TextChunk): String = documentPart.replace("{label}", chunk.label)
 
+  /** Formats known Leistungen for embedding in the extraction prompt. */
   def knownText(known: List[Leistung]): String =
     if known.isEmpty then knownEmpty
     else knownHeading + known.map(l => s"- ${l.id.value}: ${l.name.value}").mkString("\n")
 
 /** UTF-8 classpath loading with typed failures and scoped stream ownership. */
 object ExtractionPrompts:
+  /** Loads both packaged prompt files from the classpath. */
   def load: IO[Either[PromptLoadError, ExtractionPrompts]] =
     (for
       offer <- EitherT(loadText("prompts/offer-extraction.md"))
@@ -41,6 +44,7 @@ object ExtractionPrompts:
       part <- EitherT(loadText("prompts/document-part.md"))
     yield ExtractionPrompts(offer, empty, heading, part)).value
 
+  /** Reads one classpath resource as UTF-8 text, or a typed load error. */
   def loadText(path: String): IO[Either[PromptLoadError, String]] =
     IO.blocking(Option(getClass.getClassLoader.getResource(path)))
       .flatMap {
