@@ -1,19 +1,25 @@
 package builder
 
 import builder.RawOffers.*
+import builder.domain.*
+import builder.extraction.*
+import builder.repo.*
+import builder.storage.FileStore
 import cats.effect.IO
 import cats.effect.testing.scalatest.AsyncIOSpec
+import cats.syntax.all.*
 import fs2.Stream
 import org.http4s.*
 import org.http4s.implicits.*
 import org.http4s.multipart.Multiparts
 import org.http4s.multipart.Part
+import org.scalatest.EitherValues
 import org.scalatest.freespec.AsyncFreeSpec
 import org.scalatest.matchers.should.Matchers
 
 import java.nio.file.Files
 
-class DeleteOfferSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
+class DeleteOfferSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers with EitherValues:
   private val pdf = "%PDF-1.7\nfiktiv".getBytes("UTF-8")
 
   private def upload(app: TestApp): IO[(Status, String)] =
@@ -95,5 +101,99 @@ class DeleteOfferSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers:
         missing shouldBe Status.NotFound
         wrongCat shouldBe Status.NotFound
         wrongProj shouldBe Status.NotFound
+    }
+  }
+
+  "deleteOffer runs file cleanup under the lock after the DB delete; cleanup failure keeps the row gone" in {
+    val sample = SampleData.project.value
+    val fenster = CategoryId.from("fenster").value
+    TestApp.tempDir.use { dir =>
+      TestDb
+        .config(dir)
+        .toResource
+        .flatMap(PostgresProjectRepository.resource(_, List(sample)))
+        .use { repo =>
+          val files = FileStore(dir.resolve("angebote"))
+          val draft = Upload(
+            OfferId.from("u-del").value,
+            fenster,
+            "del.pdf",
+            OfferFileType.Pdf,
+            java.time.Instant.EPOCH,
+            UploadOutcome.Read(dachfenster)
+          )
+          def prepare(staged: java.nio.file.Path): UploadStored => IO[FileStep] = {
+            case UploadStored(keep, obsolete) =>
+              files
+                .install(staged, keep, OfferFileType.Pdf)
+                .map(i =>
+                  FileStep(
+                    files.rollback(i),
+                    files.finish(i) >> obsolete.traverse_(files.deleteAll)
+                  )
+                )
+          }
+          for
+            staged <- files.stage(pdf)
+            stored <- repo.addUpload(sample.id, draft, prepare(staged))
+            keep = stored.value.keep
+            file = dir.resolve(s"angebote/${keep.value}.pdf")
+            _ <- IO.blocking(Files.exists(file) shouldBe true)
+            // Cleanup fails (simulates disk error). Hard kill would look the same for orphans —
+            // the Mutex only serializes concurrent work, it does not survive process death.
+            boom = IO.raiseError[Unit](new RuntimeException("disk full"))
+            result <- repo.deleteOffer(sample.id, fenster, keep, boom)
+            view <- repo.find(sample.id)
+            orphan = Files.exists(file)
+          yield
+            result.isRight shouldBe true
+            view.value.uploads.map(_.upload.id) should not contain keep
+            orphan shouldBe true
+        }
+    }
+  }
+
+  "deleteOffer with successful cleanup removes the file while still under the lock" in {
+    val sample = SampleData.project.value
+    val fenster = CategoryId.from("fenster").value
+    TestApp.tempDir.use { dir =>
+      TestDb
+        .config(dir)
+        .toResource
+        .flatMap(PostgresProjectRepository.resource(_, List(sample)))
+        .use { repo =>
+          val files = FileStore(dir.resolve("angebote"))
+          val draft = Upload(
+            OfferId.from("u-ok").value,
+            fenster,
+            "ok.pdf",
+            OfferFileType.Pdf,
+            java.time.Instant.EPOCH,
+            UploadOutcome.Read(dachfenster)
+          )
+          def prepare(staged: java.nio.file.Path): UploadStored => IO[FileStep] = {
+            case UploadStored(keep, obsolete) =>
+              files
+                .install(staged, keep, OfferFileType.Pdf)
+                .map(i =>
+                  FileStep(
+                    files.rollback(i),
+                    files.finish(i) >> obsolete.traverse_(files.deleteAll)
+                  )
+                )
+          }
+          for
+            staged <- files.stage(pdf)
+            stored <- repo.addUpload(sample.id, draft, prepare(staged))
+            keep = stored.value.keep
+            file = dir.resolve(s"angebote/${keep.value}.pdf")
+            result <- repo.deleteOffer(sample.id, fenster, keep, files.deleteAll(keep))
+            view <- repo.find(sample.id)
+            gone = Files.exists(file)
+          yield
+            result.isRight shouldBe true
+            view.value.uploads.map(_.upload.id) should not contain keep
+            gone shouldBe false
+        }
     }
   }

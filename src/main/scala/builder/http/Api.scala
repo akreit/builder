@@ -468,14 +468,13 @@ final class Api(
     ids match
       case Left(e) => IO.pure(Left(fragmentError(StatusCode.BadRequest, Pages.describe(e))))
       case Right((p, c, o)) =>
-        repo.deleteOffer(p, c, o).flatMap {
-          case Left(e)     => IO.pure(Left(repoError(e)))
+        // File cleanup runs inside deleteOffer under the repo Mutex after the txn (upload finish
+        // pattern). Do not call deleteAll here — that would race a concurrent upload and orphan on
+        // crash between unlock and deleteAll.
+        repo.deleteOffer(p, c, o, files.deleteAll(o)).map {
+          case Left(e)     => Left(repoError(e))
           case Right(view) =>
-            files
-              .deleteAll(o)
-              .as(
-                Right(Pages.projectFragment(view, Pages.activeCategory(view, Some(c))))
-              )
+            Right(Pages.projectFragment(view, Pages.activeCategory(view, Some(c))))
         }
 
   private def repoError(e: RepoError): HtmlError = e match

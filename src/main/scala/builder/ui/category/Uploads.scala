@@ -54,7 +54,7 @@ object Uploads:
             heading,
             p(acceptanceMessage(offer)),
             lowConfidenceWarning(raw),
-            tags2.details(attr("open") := "open")(
+            tags2.details(
               tags2.summary("Ausgelesene Angebotsdaten mit Seitenangaben"),
               OfferDetail.render(raw, cur)
             )

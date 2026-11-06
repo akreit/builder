@@ -125,12 +125,16 @@ trait ProjectRepository:
   ): IO[Either[RepoError, ProjectView]]
 
   /** Deletes the uploaded offer `offer` of `category` in `id` (cascades uploads, favorites,
-    * assignments and coverage). Returns the updated project view.
+    * assignments and coverage). After a successful transaction, `cleanup` runs still under the
+    * repository lock (same pattern as upload `finish`) so a concurrent upload cannot interleave
+    * with file removal. A hard kill mid-cleanup can still leave an orphan file — the lock does not
+    * survive process death. Returns the updated project view.
     */
   def deleteOffer(
       id: ProjectId,
       category: CategoryId,
-      offer: OfferId
+      offer: OfferId,
+      cleanup: IO[Unit]
   ): IO[Either[RepoError, ProjectView]]
 
   /** Stores an uploaded offer of `id`; it is validated (and counted if valid) on every read. When
@@ -345,7 +349,8 @@ final class PostgresProjectRepository private (
   def deleteOffer(
       id: ProjectId,
       category: CategoryId,
-      offer: OfferId
+      offer: OfferId,
+      cleanup: IO[Unit]
   ): IO[Either[RepoError, ProjectView]] =
     lock.lock.surround(
       load(id).flatMap {
@@ -359,10 +364,14 @@ final class PostgresProjectRepository private (
               case Some(u) if u.upload.category != category =>
                 IO.pure(Left(RepoError.OfferNotFound(offer)))
               case Some(_) =>
-                db.transact(List(Stmt(Sql.deleteOffer, (id.value, offer.value))))
-                  .flatMap(
-                    _.fold(e => IO.pure(Left(e)), _ => load(id))
-                  )
+                db.transact(List(Stmt(Sql.deleteOffer, (id.value, offer.value)))).flatMap {
+                  case Left(e)  => IO.pure(Left(e))
+                  case Right(_) =>
+                    // File removal under the lock after commit (upload finish pattern). Errors are
+                    // swallowed like finish.attempt — DB row is already gone; a hard kill here can
+                    // still orphan the file.
+                    cleanup.attempt >> load(id)
+                }
       }
     )
 
@@ -536,12 +545,6 @@ final class PostgresProjectRepository private (
             case UploadStatus.ExtractionFailed(_) => None
         )
         .toRight(RepoError.OfferNotFound(o))
-    def sameCategory(u: Upload, l: Leistung): Either[RepoError, Unit] =
-      Either.cond(
-        u.category == l.category,
-        (),
-        RepoError.Rejected("Leistung gehört zu einer anderen Kategorie")
-      )
     e match
       case Edit.AddCategory(name) =>
         CategoryId
@@ -618,13 +621,15 @@ final class PostgresProjectRepository private (
         )
       case Edit.AssignItem(o, item, target) =>
         for
-          (u, raw) <- upload(o)
+          (_, raw) <- upload(o)
           _ <- Either.cond(
             raw.lineItems.indices.contains(item),
             (),
             RepoError.ItemNotFound(o, item)
           )
-          _ <- target.traverse(l => leistung(l).flatMap(sameCategory(u, _)))
+          // Cross-category grouping is allowed: a line item of an offer uploaded under one
+          // category may be assigned to a Leistung of another (manual scope grouping).
+          _ <- target.traverse(leistung)
         yield List(Stmt(Sql.upsertManualItem, (p, o.value, item, target.map(_.value))))
       case Edit.RateContractor(c, rating) =>
         Right(rating match
@@ -636,8 +641,8 @@ final class PostgresProjectRepository private (
         )
       case Edit.SetCoverage(o, l, coverage) =>
         for
-          (u, _) <- upload(o)
-          _ <- leistung(l).flatMap(sameCategory(u, _))
+          _ <- upload(o)
+          _ <- leistung(l) // coverage may target a Leistung of another category (foreign column)
         yield coverage match
           case Some(c) =>
             List(Stmt(Sql.upsertManualCoverage, (p, o.value, l.value, Coverage.code(c))))

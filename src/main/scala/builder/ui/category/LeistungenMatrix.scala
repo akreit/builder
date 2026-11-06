@@ -136,10 +136,34 @@ object LeistungenMatrix:
         )
       )
     )
+
+  /** Select options for position assignment: every Leistung of the project, grouped by category
+    * (cross-category grouping). `current` marks the selected Ziel.
+    */
+  private[ui] def zielOptions(view: ProjectView, current: Option[LeistungId]): Frag =
+    frag(
+      option(value := "", if current.isEmpty then selected := "selected" else frag())("– keine –"),
+      view.project.categories.map { cat =>
+        val ls = view.leistungen.filter(_.category == cat.id)
+        if ls.isEmpty then frag()
+        else
+          tag("optgroup")(attr("label") := cat.name.value)(
+            ls.map(l =>
+              option(
+                value := l.id.value,
+                if current.contains(l.id) then selected := "selected" else frag()
+              )(l.name.value)
+            )
+          )
+      }
+    )
+
   private[ui] def leistungenSection(view: ProjectView, category: Category): Frag =
     val project = view.project
     val m = Matrix.build(view, category.id)
     val leistungen = m.rows.map(_.leistung)
+    // Assignment controls for offers uploaded to this category only; Ziel may be any category.
+    val nativeColumns = m.columns.filter(_.upload.upload.category == category.id)
     tags2.section(cls := "leistungen", attr("data-kategorie") := category.id.value)(
       h3("Leistungsvergleich"),
       a(href := s"/projekte/${project.id.value}/leistungsvergleich.pdf", cls := "button")(
@@ -198,11 +222,14 @@ object LeistungenMatrix:
               s"(höchstens ${LeistungPlan.MaxNew} neue je Angebot)."
           )
       },
-      if m.columns.isEmpty then frag()
+      if nativeColumns.isEmpty then frag()
       else
         tag("details")(cls := "zuordnung")(
           tag("summary")("Positionen zuordnen"),
-          m.columns.map { col =>
+          p(cls := "hinweis")(
+            "Ziel-Leistung darf aus jeder Kategorie kommen (manuelle Gruppenbildung)."
+          ),
+          nativeColumns.map { col =>
             val assigned = Matrix.effective(view.assignments)
             div(
               h4(columnTitle(col)),
@@ -225,22 +252,7 @@ object LeistungenMatrix:
                         select(
                           name := "ziel",
                           attr("aria-label") := s"Leistung für Position ${i + 1}"
-                        )(
-                          option(
-                            value := "",
-                            if current.isEmpty then selected := "selected" else frag()
-                          )(
-                            "– keine –"
-                          ),
-                          leistungen.map(l =>
-                            option(
-                              value := l.id.value,
-                              if current.contains(l.id) then selected := "selected" else frag()
-                            )(
-                              l.name.value
-                            )
-                          )
-                        )
+                        )(zielOptions(view, current))
                       )
                     )
                   )
