@@ -1,6 +1,7 @@
 package builder.ui.category
 
 import builder.domain.*
+import builder.domain.OfferLabel
 import builder.extraction.*
 import builder.repo.*
 import builder.ui.Format
@@ -34,7 +35,8 @@ object LeistungenMatrix:
     case CoverageSource.Manual    => "manuell"
     case CoverageSource.Unknown   => "nicht erkannt"
   private[ui] def columnTitle(c: MatrixColumn): String =
-    c.raw.contractor.value.filter(_.trim.nonEmpty).getOrElse(c.upload.upload.fileName)
+    val label = OfferLabel.display(c.raw)
+    if label.nonEmpty then label else c.upload.upload.fileName
 
   /** German summary for the cell's position toggle ("1 Position" / "N Positionen"). */
   private[ui] def positionsSummaryLabel(count: Int): String =

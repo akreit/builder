@@ -204,7 +204,7 @@ object ClaudeOfferExtractor:
   private def arrayOf(item: Json): Json = Json.obj("type" -> "array".asJson, "items" -> item)
 
   val inputSchema: Json = obj(
-    fields("contractor", "date", "validUntil") ++
+    fields("contractor", "recipient", "date", "validUntil") ++
       List(
         "lineItems" -> arrayOf(
           obj(

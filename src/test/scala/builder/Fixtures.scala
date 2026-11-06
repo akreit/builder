@@ -48,6 +48,7 @@ object Fixtures extends EitherValues:
       Offer.from(
         id = id,
         contractor = Extracted.manual(Contractor(s"Contractor ${id.value}")),
+        recipient = None,
         date = Extracted.manual(Dates.of(2026, 10, 1).value),
         validUntil = None,
         category = category.id,

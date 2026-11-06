@@ -79,18 +79,22 @@ final case class RawOffer(
     notes: List[Field],
     exclusions: List[Field],
     neueLeistungen: Option[List[RawNeueLeistung]] = None,
-    abdeckung: Option[List[RawAbdeckung]] = None
+    abdeckung: Option[List[RawAbdeckung]] = None,
+    /** Addressee / Angebotsadressat. Absent on legacy JSON (v1/v2); never invent a name. */
+    recipient: Option[Field] = None
 ) derives Codec.AsObject:
   /** Offer-level (German label, field) pairs, in display order. */
-  def labelled: List[(String, Field)] = List(
-    "Firma" -> contractor,
-    "Angebotsdatum" -> date,
-    "Gültig bis" -> validUntil,
-    "Netto" -> net,
-    "MwSt.-Satz" -> vatRate,
-    "MwSt." -> vat,
-    "Brutto" -> gross
-  )
+  def labelled: List[(String, Field)] =
+    List("Firma" -> contractor) ++
+      recipient.toList.map("Adressat" -> _) ++
+      List(
+        "Angebotsdatum" -> date,
+        "Gültig bis" -> validUntil,
+        "Netto" -> net,
+        "MwSt.-Satz" -> vatRate,
+        "MwSt." -> vat,
+        "Brutto" -> gross
+      )
 
   /** German labels of every field the extractor was unsure about. */
   def lowConfidenceFields: List[String] =

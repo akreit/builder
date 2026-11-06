@@ -169,7 +169,7 @@ object Endpoints:
     statusCode.and(htmlBodyUtf8).mapTo[HtmlError]
 
   /** Endpoints whose decode failures are rendered as htmx error fragments. */
-  val htmxNames: Set[String] = Set("upload-offer", "mark-favorite", "edit")
+  val htmxNames: Set[String] = Set("upload-offer", "mark-favorite", "delete-offer", "edit")
 
   /** Start route of the home project: redirects to its first category tab. */
   val landing =
@@ -219,6 +219,19 @@ object Endpoints:
       .out(htmlBodyUtf8)
       .errorOut(fragmentError)
 
+  /** htmx: deletes an uploaded offer (and cascaded rows) and returns the re-rendered fragment. */
+  val deleteOffer =
+    endpoint.post
+      .name("delete-offer")
+      .in(
+        "ui" / "projects" / path[String]("projectId") / "categories" / path[String](
+          "categoryId"
+        ) / "angebote" / path[String]("offerId") / "loeschen"
+      )
+      .securityIn(htmxHeaders)
+      .out(htmlBodyUtf8)
+      .errorOut(fragmentError)
+
   /** htmx multipart: uploads an offer file (PDF/JPEG/PNG) into a category, reads it and returns the
     * re-rendered overview fragment.
     */
@@ -262,6 +275,10 @@ object Api:
     def domain[A](e: Either[DomainError, A]): Either[String, A] = e.left.map(Pages.describe)
     def category = field("kategorie").flatMap(c => domain(CategoryId.from(c)))
     def categoryName = field("name").flatMap(n => domain(CategoryName.from(n)))
+    def newCategoryName =
+      form.get("name").map(_.trim).filter(_.nonEmpty) match
+        case Some(n) => domain(CategoryName.from(n))
+        case None    => Left("Kategorie: Bitte einen Namen eingeben.")
     def leistung(k: String) = field(k).flatMap(l => domain(LeistungId.from(l)))
     def leistungName = field("name").flatMap(n => domain(LeistungName.from(n)))
     def offer = field("angebot").flatMap(o => domain(OfferId.from(o)))
@@ -269,7 +286,7 @@ object Api:
       _.toIntOption.filter(_ >= 1).map(_ - 1).toRight("Ungültige Position")
     )
     field("aktion").flatMap {
-      case "kategorie-neu"        => categoryName.map(Edit.AddCategory(_))
+      case "kategorie-neu"        => newCategoryName.map(Edit.AddCategory(_))
       case "kategorie-umbenennen" => (category, categoryName).mapN(Edit.RenameCategory(_, _))
       case "kategorie-loeschen"   => category.map(Edit.DeleteCategory(_))
       case "leistung-neu"         => (category, leistungName).mapN(Edit.AddLeistung(_, _))
@@ -436,6 +453,29 @@ final class Api(
           case Right(view) =>
             Right(Pages.projectFragment(view, Pages.activeCategory(view, Some(c))))
           case Left(e) => Left(repoError(e))
+        }
+
+  private def deleteOfferLogic(
+      projectId: String,
+      categoryId: String,
+      offerId: String
+  ): IO[Either[HtmlError, String]] =
+    val ids = for
+      p <- ProjectId.from(projectId)
+      c <- CategoryId.from(categoryId)
+      o <- OfferId.from(offerId)
+    yield (p, c, o)
+    ids match
+      case Left(e) => IO.pure(Left(fragmentError(StatusCode.BadRequest, Pages.describe(e))))
+      case Right((p, c, o)) =>
+        repo.deleteOffer(p, c, o).flatMap {
+          case Left(e)     => IO.pure(Left(repoError(e)))
+          case Right(view) =>
+            files
+              .deleteAll(o)
+              .as(
+                Right(Pages.projectFragment(view, Pages.activeCategory(view, Some(c))))
+              )
         }
 
   private def repoError(e: RepoError): HtmlError = e match
@@ -609,6 +649,9 @@ final class Api(
       Endpoints.markFavorite
         .serverSecurityLogic[Unit, IO](checkRequest)
         .serverLogic(_ => favoriteLogic.tupled),
+      Endpoints.deleteOffer
+        .serverSecurityLogic[Unit, IO](checkRequest)
+        .serverLogic(_ => deleteOfferLogic.tupled),
       Endpoints.edit
         .serverSecurityLogic[Unit, IO](checkRequest)
         .serverLogic(_ => editLogic.tupled),

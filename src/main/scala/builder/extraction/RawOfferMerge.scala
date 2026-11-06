@@ -33,7 +33,9 @@ object RawOfferMerge:
           exclusions = offers.flatMap(_.exclusions).distinct,
           neueLeistungen =
             optional(offers.flatMap(_.neueLeistungen.toList.flatten).distinctBy(_.key)),
-          abdeckung = optional(coverage(offers.flatMap(_.abdeckung.toList.flatten)))
+          abdeckung = optional(coverage(offers.flatMap(_.abdeckung.toList.flatten))),
+          recipient =
+            Some(first(offers.map(_.recipient.getOrElse(absent)))).filter(_.text.isDefined)
         )
 
   private val absent: Field = Field(None, None, Confidence.Low)
@@ -50,6 +52,7 @@ object RawOfferMerge:
   private def conflicts(parts: List[(TextChunk, RawOffer)]): List[Field] =
     List[(String, Pick, RawOffer => Field)](
       ("Firma", Pick.First, _.contractor),
+      ("Adressat", Pick.First, _.recipient.getOrElse(absent)),
       ("Angebotsdatum", Pick.First, _.date),
       ("Gültig bis", Pick.First, _.validUntil),
       ("Netto", Pick.Last, _.net),

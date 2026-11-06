@@ -13,11 +13,11 @@ object Styles:
       |.status{display:inline-block;padding:.1rem .5rem;border-radius:4px;font-size:.85rem;margin-left:.5rem}
       |.gezaehlt{background:#d9f2d9}.offen{background:#ffe9b3}.fehlt{background:#f5d0d0}
       |.favorit{font-weight:bold}.summe{background:#f4f6fa;padding:1rem;border-radius:6px}
-      |.hinweis{color:#666;font-size:.9rem}.fehlermeldung{background:#f5d0d0;padding:.5rem 1rem;border-radius:6px}
+      |.hinweis{color:#666;font-size:.9rem}.fehlermeldung{background:#f5d0d0;padding:.5rem 1rem;border-radius:6px;display:flex;align-items:flex-start;gap:.75rem;justify-content:space-between}.fehlermeldung-text{flex:1}.fehlermeldung-schliessen{border:none;background:transparent;font-size:1.25rem;line-height:1;cursor:pointer;padding:.1rem .35rem;border-radius:4px}.fehlermeldung-schliessen:hover{background:rgba(0,0,0,.08)}.fehlermeldung-schliessen:focus-visible{outline:3px solid #2f3b4c;outline-offset:2px}
       |.upload{border-top:1px dashed #ccc;margin-top:.75rem;padding-top:.5rem}.upload h3{font-size:1rem;margin:.25rem 0}
       |.unsicher{background:#fff3cd}.flag{font-size:.8rem;padding:0 .3rem;border-radius:3px;white-space:nowrap}
       |.flag.niedrig{background:#f0ad4e;color:#000}.flag.mittel{background:#eee}.seite{color:#666;font-size:.8rem;white-space:nowrap}
-      |.warnung{background:#fff3cd;padding:.5rem 1rem;border-radius:6px}.abweichung{background:#f5d0d0;padding:.5rem 1rem;border-radius:6px}
+      |.warnung{background:#fff3cd;padding:.5rem 1rem;border-radius:6px}details.unsichere-felder>summary{cursor:pointer;font-weight:bold}.abweichung{background:#f5d0d0;padding:.5rem 1rem;border-radius:6px}
       |table.felder th{width:10rem}form.hochladen{margin:.5rem 0}.htmx-indicator{display:none}.htmx-request .htmx-indicator,.htmx-request.htmx-indicator{display:inline}
       |a.button{display:inline-block;margin:0 0 .75rem;padding:.4rem .75rem;background:#2f3b4c;color:#fff;border-radius:4px;text-decoration:none}a.button:hover{background:#44556d}a.button:focus-visible{outline:3px solid #f0ad4e;outline-offset:2px}
       |table.matrix td,table.matrix th{vertical-align:top;border:1px solid #e3e3e3}table.matrix th.leistung{min-width:9rem}

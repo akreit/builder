@@ -22,7 +22,7 @@ sbt run          # start the HTTP server (port 8080, override with PORT=...)
 ```sh
 curl http://localhost:8080/health
 curl http://localhost:8080/health
-curl -i http://localhost:8080/       # leeres Standardprojekt „default“ (200)
+curl -i http://localhost:8080/       # Standardprojekt „default“ mit Gewerken (200)
 ```
 
 ## Lokal mit Docker starten
@@ -69,8 +69,10 @@ docker compose up -d db   # nur an 127.0.0.1:5432 erreichbar (anderer Port: POST
 DATABASE_URL=postgres://builder:<passwort>@localhost:5432/builder sbt run
 ```
 
+Projektname der Kopfzeile: `BUILDER_PROJECT_NAME` (Compose-Default `Mathildenstraße 11`).
+
 Hochgeladene Angebotsdateien liegen lokal unter `BUILDER_DATA_DIR` (Default `data/`, in Compose
-Volume `builder-data` → `/data`), verwaltet über `FileStore`. Gehosteter Objektspeicher ist noch
+Named Volume `builder-data` → `/data`/`angebote`), verwaltet über `FileStore`. Ausgelesene Daten liegen in Postgres (Volume `builder-pg`). `docker compose down` / `up` / `restart` erhält beides; `docker compose down -v` löscht die Volumes. Gehosteter Objektspeicher ist noch
 geplant (#6).
 
 Tests laufen gegen ein echtes Postgres: ohne weitere Einstellung startet `sbt testFull` per
@@ -97,7 +99,8 @@ Sources live in `docs/`. The output goes to `target/docs/`.
 ## Layout (`src/main/scala/builder`)
 
 - `Main.scala`: Ember server entry point
-- `src/test/scala/builder/SampleData.scala`: test-only fixtures; runtime starts with an empty default project.
+- `DefaultProject.scala`: home project shell (configurable name, structural categories)
+- `src/test/scala/builder/SampleData.scala`: test-only fixtures with demo offers
 - `domain/`: model, money, extracted offer data, errors
 - `totals/`: running-total calculation
 - `repo/`: project repository (Postgres via Skunk, versioned migrations)

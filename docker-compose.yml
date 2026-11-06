@@ -28,6 +28,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY fehlt (in .env oder Shell setzen)}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
       BUILDER_DATA_DIR: /data
+      BUILDER_PROJECT_NAME: ${BUILDER_PROJECT_NAME:-Mathildenstraße 11}
       DATABASE_HOST: db
       DATABASE_PORT: "5432"
       DATABASE_USER: ${POSTGRES_USER:-builder}

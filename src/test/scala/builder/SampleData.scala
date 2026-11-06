@@ -66,6 +66,7 @@ object SampleData:
       o <- Offer.from(
         id = offerId,
         contractor = ex(Contractor(contractor)),
+        recipient = None,
         date = ex(date),
         validUntil = Some(Extracted.fromPage(valid, pg, Confidence.Medium)),
         category = category,
